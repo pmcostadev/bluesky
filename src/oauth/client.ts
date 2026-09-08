@@ -3,7 +3,6 @@ import {
   type NodeSavedSession,
   type NodeSavedState
 } from '@atproto/oauth-client-node';
-import { JoseKey } from '@atproto/jwk-jose';
 import { KEYS, kvDel, kvGet, kvSet, withLock } from './store';
 
 /**
@@ -11,42 +10,27 @@ import { KEYS, kvDel, kvGet, kvSet, withLock } from './store';
  *
  * @atproto/oauth-client-node carries the parts of atproto OAuth that are
  * mandatory and unpleasant to hand-roll: DPoP proofs, rotating server nonces,
- * PAR, PKCE, and identity resolution from handle to PDS. We supply the storage
- * and the signing key.
+ * PAR, PKCE, and identity resolution from handle to PDS. We supply the storage.
  *
- * Registered as a *confidential* client (we hold a private key and sign client
- * assertions), which is what earns long-lived sessions. A public client would
- * cap sessions at 14 days.
+ * ---
+ * Registered as a PUBLIC client (token_endpoint_auth_method: 'none'), which
+ * means no signing keyset and no client assertions.
+ *
+ * Why not confidential: npm resolves two copies of @atproto/jwk, one nested
+ * under jwk-jose and one under oauth-client-node. A JoseKey built from the
+ * first is not an instanceof the Key class the second checks against, so the
+ * keyset silently ends up empty and client construction fails with "requires at
+ * least one ES256 signing key with a kid". The real fix is to dedupe that
+ * transitive dependency; until then, a public client is fully functional.
+ *
+ * Tradeoff: atproto caps public-client sessions and refresh tokens at 14 days,
+ * so a connected account needs re-authorising roughly every two weeks.
+ * Confidential clients get up to 180 days per refresh token.
  */
 
 const STATE_TTL_S = 15 * 60;
 
-/**
- * The keyset argument is typed against the `Key` class from `@atproto/jwk`, and
- * `Key` has a protected member. npm resolves two copies of that package (one
- * under jwk-jose, one under oauth-client-node), so TypeScript treats the two
- * `Key` classes as unrelated nominal types even though they are structurally
- * and behaviourally identical at runtime. This alias documents that bridge, and
- * keeps the assertion in exactly one place instead of scattering `any`.
- */
-type KeysetArg = ConstructorParameters<typeof NodeOAuthClient>[0]['keyset'];
-
 let cached: Promise<NodeOAuthClient> | null = null;
-
-function privateKeyJwk(): string {
-  const raw = process.env.BLUESKY_PRIVATE_KEY;
-  if (!raw) {
-    throw new Error(
-      'BLUESKY_PRIVATE_KEY is not set. It must contain the base64-encoded ES256 private key in JWK form.'
-    );
-  }
-  // Accept either raw JSON or base64-encoded JSON.
-  const text = raw.trim().startsWith('{')
-    ? raw.trim()
-    : Buffer.from(raw.trim(), 'base64').toString('utf8');
-  JSON.parse(text); // fail loudly here rather than deep inside the library
-  return text;
-}
 
 export function publicOrigin(): string {
   const origin = process.env.OAUTH_PUBLIC_ORIGIN;
@@ -75,20 +59,15 @@ export function clientMetadata() {
     response_types: ['code'] as ['code'],
     scope: BSKY_SCOPE,
     application_type: 'web' as const,
-    token_endpoint_auth_method: 'private_key_jwt' as const,
-    token_endpoint_auth_signing_alg: 'ES256',
-    dpop_bound_access_tokens: true as const,
-    jwks_uri: `${origin}/jwks.json`
+    token_endpoint_auth_method: 'none' as const,
+    dpop_bound_access_tokens: true as const
   };
 }
 
 export function getOAuthClient(): Promise<NodeOAuthClient> {
   cached ??= (async () => {
-    const key = await JoseKey.fromImportable(privateKeyJwk(), 'key1');
-
     return new NodeOAuthClient({
       clientMetadata: clientMetadata(),
-      keyset: [key] as unknown as KeysetArg,
 
       stateStore: {
         async set(k: string, state: NodeSavedState) {
@@ -123,8 +102,11 @@ export function getOAuthClient(): Promise<NodeOAuthClient> {
   return cached;
 }
 
-/** Public half of the keyset, for /jwks.json. */
+/**
+ * Public clients advertise no JWKS. The route is kept so the path does not 404
+ * for anything that probes it, and so restoring confidential mode later is a
+ * one-file change rather than a re-plumb.
+ */
 export async function publicJwks() {
-  const client = await getOAuthClient();
-  return client.jwks;
+  return { keys: [] as unknown[] };
 }
