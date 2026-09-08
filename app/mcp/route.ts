@@ -1,64 +1,72 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createMCPServer } from '@/mcp-server';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { AuthError, bearerOf, resolveAuth } from '@/oauth/resolve';
 
-/**
- * Parse credentials from a "identifier:password" combined string.
- * Splits on the FIRST colon only, so passwords containing colons are safe.
- */
-function parseCombined(value: string): { identifier: string; password: string } | null {
-  const colonIndex = value.indexOf(':');
-  if (colonIndex === -1) return null;
-  const identifier = value.substring(0, colonIndex).trim();
-  const password = value.substring(colonIndex + 1).trim();
-  if (!identifier || !password) return null;
-  return { identifier, password };
+export const runtime = 'nodejs';
+export const maxDuration = 60;
+
+const CORS_HEADERS = [
+  'Content-Type',
+  'Authorization',
+  'mcp-session-id',
+  'mcp-protocol-version'
+].join(', ');
+
+function publicOrigin(req: NextRequest): string {
+  const explicit = process.env.OAUTH_PUBLIC_ORIGIN;
+  if (explicit) return explicit.replace(/\/$/, '');
+  const host = req.headers.get('x-forwarded-host') ?? req.headers.get('host') ?? 'localhost:3000';
+  const proto = req.headers.get('x-forwarded-proto') ?? 'https';
+  return `${proto}://${host}`;
 }
 
 /**
- * Extract Bluesky credentials from the request using one of three methods:
- *
- * Method 1 — Two separate headers (HuggingChat, curl):
- *   X-BLUESKY-IDENTIFIER: handle.bsky.social
- *   X-BLUESKY-PASSWORD: your-app-password
- *
- * Method 2 — Single combined header (Vibe, custom clients):
- *   X-BLUESKY-CREDENTIALS: handle.bsky.social:your-app-password
- *
- * Method 3 — Authorization Bearer (MCP Playground, OpenAI-style clients):
- *   Authorization: Bearer handle.bsky.social:your-app-password
+ * Answer an unauthenticated call the way the MCP spec expects: 401 plus a
+ * WWW-Authenticate header naming the resource metadata document. Compliant
+ * clients read that, discover the authorization server, and start the OAuth
+ * flow on their own instead of guessing.
  */
-function extractCredentials(req: NextRequest): { identifier?: string; password?: string } {
-  // Method 1: two explicit headers (highest priority)
-  const identifier = req.headers.get('x-bluesky-identifier') ?? undefined;
-  const password = req.headers.get('x-bluesky-password') ?? undefined;
-  if (identifier && password) {
-    return { identifier, password };
-  }
-
-  // Method 2: single combined header
-  const combined = req.headers.get('x-bluesky-credentials');
-  if (combined) {
-    const parsed = parseCombined(combined);
-    if (parsed) return parsed;
-  }
-
-  // Method 3: Authorization: Bearer handle:password
-  const authHeader = req.headers.get('authorization');
-  if (authHeader?.startsWith('Bearer ')) {
-    const token = authHeader.substring(7).trim();
-    const parsed = parseCombined(token);
-    if (parsed) return parsed;
-  }
-
-  return {};
+function unauthorized(req: NextRequest, message: string) {
+  const origin = publicOrigin(req);
+  return NextResponse.json(
+    {
+      jsonrpc: '2.0',
+      error: { code: -32001, message },
+      id: null
+    },
+    {
+      status: 401,
+      headers: {
+        'WWW-Authenticate': `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"`,
+        'Access-Control-Allow-Origin': '*'
+      }
+    }
+  );
 }
 
 export async function POST(req: NextRequest) {
+  let auth;
   try {
-    const { identifier, password } = extractCredentials(req);
+    auth = await resolveAuth(bearerOf(req));
+  } catch (error) {
+    if (error instanceof AuthError) return unauthorized(req, error.message);
+    console.error('MCP auth error:', error);
+    return NextResponse.json(
+      {
+        jsonrpc: '2.0',
+        error: {
+          code: -32603,
+          message: error instanceof Error ? error.message : String(error)
+        },
+        id: null
+      },
+      { status: 500 }
+    );
+  }
 
-    const server = createMCPServer({ identifier, password });
+  try {
+    const server = createMCPServer(auth);
     const transport = new WebStandardStreamableHTTPServerTransport();
 
     await server.connect(transport);
@@ -79,17 +87,18 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const origin = publicOrigin(req);
   return NextResponse.json({
     status: 'MCP endpoint active',
-    version: '1.0.0',
+    version: '2.0.0',
     transport: 'WebStandardStreamableHTTPServerTransport (POST only)',
     auth: {
-      methods: [
-        'Two headers: X-BLUESKY-IDENTIFIER + X-BLUESKY-PASSWORD',
-        'Single header: X-BLUESKY-CREDENTIALS: handle:password',
-        'Bearer token: Authorization: Bearer handle:password'
-      ]
+      type: 'OAuth 2.1 (AT Protocol)',
+      note: 'App passwords are no longer accepted. Connect a Bluesky account through OAuth; the access token is sent as "Authorization: Bearer <token>".',
+      authorization_server: origin,
+      metadata: `${origin}/.well-known/oauth-authorization-server`,
+      resource_metadata: `${origin}/.well-known/oauth-protected-resource`
     }
   });
 }
@@ -100,15 +109,9 @@ export async function OPTIONS() {
     headers: {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': [
-        'Content-Type',
-        'Authorization',
-        'x-bluesky-identifier',
-        'x-bluesky-password',
-        'x-bluesky-credentials',
-        'mcp-session-id'
-      ].join(', '),
-      'Access-Control-Max-Age': '86400',
-    },
+      'Access-Control-Allow-Headers': CORS_HEADERS,
+      'Access-Control-Expose-Headers': 'WWW-Authenticate, mcp-session-id',
+      'Access-Control-Max-Age': '86400'
+    }
   });
 }
