@@ -1,6 +1,6 @@
 {
   "name": "bluesky-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@atproto/api": "^0.13.8",
+    "@atproto/jwk-jose": "^0.1.2",
+    "@atproto/oauth-client-node": "^0.2.3",
     "@modelcontextprotocol/sdk": "^1.10.3",
     "better-react-mathjax": "^1.0.3",
     "cors": "^2.8.5",
