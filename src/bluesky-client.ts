@@ -1,11 +1,20 @@
 /**
- * Bluesky API Client with Secure Credential Management
- * Credentials are injected externally via headers - never stored in env
+ * Bluesky API client.
+ *
+ * Authentication is OAuth only: an already-authenticated, DPoP-bound session is
+ * bound onto an instance by src/oauth/adopt.ts before any tool runs. Nothing
+ * here logs in, and no password ever reaches this class.
+ *
+ * Two call styles are used against the network:
+ *   - typed namespaces (agent.getProfile, agent.post, ...) for the common cases
+ *   - agent.call(nsid, params, data, opts) for lexicons with no typed helper
+ *
+ * `agent.api.xrpc.*` must not be used: it exists on the legacy password agent
+ * but not on the OAuth one, and calling it throws "xrpc.get is not a function".
  */
 
-import { BskyAgent, AppBskyFeedPost } from '@atproto/api';
+import { Agent, AppBskyFeedPost } from '@atproto/api';
 import type {
-  BlueskyCredentials,
   AuthenticatedSession,
   TimelineOptions,
   AuthorFeedOptions,
@@ -25,50 +34,13 @@ import type {
 } from './types';
 import { formatError } from './utils';
 
+const JSON_ENCODING = { encoding: 'application/json' } as const;
+
 export class BlueskyClient {
-  private agent: BskyAgent;
+  /** Set by bindOAuthSession(); never constructed here. */
+  private agent!: Agent;
   private session: AuthenticatedSession | null = null;
-  private readonly serviceUrl: string;
   private isAuthenticated = false;
-  private readonly APPVIEW_URL = 'https://api.bsky.app';
-
-  constructor(serviceUrl = 'https://bsky.social') {
-    this.serviceUrl = serviceUrl;
-    this.agent = new BskyAgent({ service: serviceUrl });
-  }
-
-  /**
-   * Authenticate with Bluesky using externally provided credentials
-   * Credentials are NEVER stored - only held in memory for the session
-   */
-  async authenticate(credentials: BlueskyCredentials): Promise<AuthenticatedSession> {
-    try {
-      await this.agent.login({
-        identifier: credentials.identifier,
-        password: credentials.password
-      });
-
-      // Get session details
-      const sessionData = this.agent.session;
-
-      if (!sessionData) {
-        throw new Error('Failed to establish session');
-      }
-
-      this.session = {
-        accessJwt: sessionData.accessJwt,
-        refreshJwt: sessionData.refreshJwt,
-        did: sessionData.did,
-        handle: sessionData.handle
-      };
-
-      this.isAuthenticated = true;
-      return this.session;
-    } catch (error) {
-      this.isAuthenticated = false;
-      throw new Error(`Authentication failed: ${formatError(error)}`);
-    }
-  }
 
   /**
    * Check if client is authenticated
@@ -78,86 +50,105 @@ export class BlueskyClient {
   }
 
   /**
-   * Get current session info (without sensitive tokens)
+   * Get current session info (without sensitive tokens).
    */
   getSessionInfo(): { did?: string; handle?: string; authenticated: boolean } {
     return {
       did: this.session?.did,
-      handle: this.session?.handle,
+      handle: this.session?.handle || undefined,
       authenticated: this.isAuthenticated
     };
   }
 
   /**
-   * Make a direct request to the Bluesky AppView (api.bsky.app)
-   * Used for lexicons that the PDS does not support proxying.
+   * Resolve and cache the account's handle. OAuth gives us a DID only, so this
+   * costs one profile lookup the first time it is needed.
+   */
+  async resolveHandle(): Promise<string | undefined> {
+    if (!this.session) return undefined;
+    if (this.session.handle) return this.session.handle;
+
+    try {
+      const profile = await this.getProfile(this.session.did);
+      this.session.handle = profile.handle;
+      return profile.handle;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Guard used by every authenticated call. */
+  private requireAuth(): void {
+    if (!this.isLoggedIn()) {
+      throw new Error(
+        'Not authenticated. Connect a Bluesky account through OAuth before calling this tool.'
+      );
+    }
+  }
+
+  /**
+   * Call a lexicon that has no typed helper on the agent.
+   * Works on both the OAuth agent and the legacy one.
+   */
+  private async rpcGet<T = any>(nsid: string, params: Record<string, unknown> = {}): Promise<T> {
+    const clean = Object.fromEntries(
+      Object.entries(params).filter(([, v]) => v !== undefined && v !== null)
+    );
+    const res = await this.agent.call(nsid, clean);
+    return res.data as T;
+  }
+
+  private async rpcPost<T = any>(nsid: string, body: Record<string, unknown> = {}): Promise<T> {
+    const res = await this.agent.call(nsid, {}, body, JSON_ENCODING);
+    return res.data as T;
+  }
+
+  /**
+   * Make a request to a lexicon hosted on the AppView rather than the PDS
+   * (bookmarks, drafts, chat, age assurance).
+   *
+   * This implementation is replaced at runtime by bindOAuthSession(), which
+   * substitutes a DPoP-signed fetch that proxies through the user's PDS. The
+   * body here only runs if something calls the client without binding a
+   * session first, so it fails loudly instead of silently unauthenticated.
    */
   private async appviewRequest<T>(
-    nsid: string,
-    params?: Record<string, string | number | undefined | null>,
-    body?: Record<string, unknown>
+    _nsid: string,
+    _params?: Record<string, string | number | undefined | null>,
+    _body?: Record<string, unknown>
   ): Promise<T> {
-    if (!this.isLoggedIn() || !this.session) {
-      throw new Error('Not authenticated');
-    }
-
-    const url = new URL(`${this.APPVIEW_URL}/xrpc/${nsid}`);
-    if (params) {
-      for (const [key, value] of Object.entries(params)) {
-        if (value !== undefined && value !== null) {
-          url.searchParams.set(key, String(value));
-        }
-      }
-    }
-
-    const response = await fetch(url.toString(), {
-      method: body ? 'POST' : 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.session.accessJwt}`
-      },
-      body: body ? JSON.stringify(body) : undefined
-    });
-
-    if (!response.ok) {
-      let message = `AppView request failed: ${response.status} ${response.statusText}`;
-      try {
-        const errorData = (await response.json()) as { message?: string; error?: string };
-        if (errorData?.message) {
-          message = errorData.message;
-        } else if (errorData?.error) {
-          message = errorData.error;
-        }
-      } catch {
-        // ignore JSON parse errors
-      }
-      throw new Error(message);
-    }
-
-    const text = await response.text();
-    if (text.trim().length === 0) {
-      return undefined as T;
-    }
-    return JSON.parse(text) as T;
+    throw new Error(
+      'No OAuth session is bound to this client, so AppView requests cannot be signed.'
+    );
   }
 
   /**
    * Upload an image blob to the user's PDS.
    */
   async uploadImage(data: Uint8Array, mimeType: string): Promise<unknown> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
+    this.requireAuth();
     const res = await this.agent.uploadBlob(data, { encoding: mimeType });
     return res.data.blob;
   }
 
   /**
    * Upload a raw blob to the user's PDS.
-   * Returns the blob reference that can be used in record embeds.
    */
   async uploadBlob(data: Uint8Array, mimeType: string): Promise<unknown> {
     return this.uploadImage(data, mimeType);
+  }
+
+  /** Upload images and shape them into an embed object. */
+  private async buildImageEmbed(images: ProcessedImage[]): Promise<Record<string, unknown>> {
+    const uploaded = await Promise.all(
+      images.map(async (img) => {
+        const blob = await this.uploadImage(img.data, img.mimeType);
+        const imageObj: Record<string, unknown> = { image: blob, alt: img.alt };
+        if (img.aspectRatio) imageObj.aspectRatio = img.aspectRatio;
+        return imageObj;
+      })
+    );
+    return { $type: 'app.bsky.embed.images', images: uploaded };
   }
 
   /**
@@ -167,18 +158,11 @@ export class BlueskyClient {
     text: string,
     options: {
       langs?: string[];
-      reply?: {
-        rootUri: string;
-        rootCid: string;
-        parentUri: string;
-        parentCid: string;
-      };
+      reply?: { rootUri: string; rootCid: string; parentUri: string; parentCid: string };
       images?: ProcessedImage[];
     } = {}
   ): Promise<CreatePostResult> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
+    this.requireAuth();
 
     try {
       const postRecord: AppBskyFeedPost.Record = {
@@ -199,31 +183,11 @@ export class BlueskyClient {
       }
 
       if (options.images && options.images.length > 0) {
-        const images = await Promise.all(
-          options.images.map(async (img) => {
-            const blob = await this.uploadImage(img.data, img.mimeType);
-            const imageObj: Record<string, unknown> = {
-              image: blob,
-              alt: img.alt
-            };
-            if (img.aspectRatio) {
-              imageObj.aspectRatio = img.aspectRatio;
-            }
-            return imageObj;
-          })
-        );
-        (postRecord as Record<string, unknown>).embed = {
-          $type: 'app.bsky.embed.images',
-          images
-        };
+        (postRecord as Record<string, unknown>).embed = await this.buildImageEmbed(options.images);
       }
 
       const result = await this.agent.post(postRecord);
-
-      return {
-        uri: result.uri,
-        cid: result.cid
-      };
+      return { uri: result.uri, cid: result.cid };
     } catch (error) {
       throw new Error(`Failed to create post: ${formatError(error)}`);
     }
@@ -232,17 +196,16 @@ export class BlueskyClient {
   /**
    * Get user's timeline (home feed)
    */
-  async getTimeline(options: TimelineOptions = {}): Promise<{ feed: FeedViewPost[]; cursor?: string }> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
+  async getTimeline(
+    options: TimelineOptions = {}
+  ): Promise<{ feed: FeedViewPost[]; cursor?: string }> {
+    this.requireAuth();
 
     try {
       const response = await this.agent.getTimeline({
         cursor: options.cursor,
         limit: options.limit
       });
-
       return {
         feed: response.data.feed as unknown as FeedViewPost[],
         cursor: response.data.cursor
@@ -262,7 +225,6 @@ export class BlueskyClient {
         cursor: options.cursor,
         limit: options.limit
       });
-
       return {
         feed: response.data.feed as unknown as FeedViewPost[],
         cursor: response.data.cursor
@@ -275,7 +237,9 @@ export class BlueskyClient {
   /**
    * Get posts by a specific author
    */
-  async getAuthorFeed(options: AuthorFeedOptions): Promise<{ feed: FeedViewPost[]; cursor?: string }> {
+  async getAuthorFeed(
+    options: AuthorFeedOptions
+  ): Promise<{ feed: FeedViewPost[]; cursor?: string }> {
     try {
       const response = await this.agent.getAuthorFeed({
         actor: options.actor,
@@ -283,7 +247,6 @@ export class BlueskyClient {
         cursor: options.cursor,
         limit: options.limit
       });
-
       return {
         feed: response.data.feed as unknown as FeedViewPost[],
         cursor: response.data.cursor
@@ -303,10 +266,7 @@ export class BlueskyClient {
         depth: options.depth,
         parentHeight: options.parentHeight
       });
-
-      return {
-        thread: response.data.thread as unknown as ThreadViewPost
-      };
+      return { thread: response.data.thread as unknown as ThreadViewPost };
     } catch (error) {
       throw new Error(`Failed to get thread: ${formatError(error)}`);
     }
@@ -337,19 +297,15 @@ export class BlueskyClient {
   }
 
   /**
-   * Search for actors (users) - for AI search engine functionality
+   * Search for actors (users)
    */
   async searchActors(options: SearchActorsOptions): Promise<{ actors: ActorSearchResult[] }> {
     try {
-      // Use public API for search (no auth required)
       const response = await this.agent.app.bsky.actor.searchActors({
         term: options.term,
         limit: options.limit
       });
-
-      return {
-        actors: response.data.actors as ActorSearchResult[]
-      };
+      return { actors: response.data.actors as ActorSearchResult[] };
     } catch (error) {
       throw new Error(`Failed to search actors: ${formatError(error)}`);
     }
@@ -358,23 +314,22 @@ export class BlueskyClient {
   /**
    * Search for actors with typeahead (for autocomplete)
    */
-  async searchActorsTypeahead(options: SearchActorsOptions): Promise<{ actors: ActorSearchResult[] }> {
+  async searchActorsTypeahead(
+    options: SearchActorsOptions
+  ): Promise<{ actors: ActorSearchResult[] }> {
     try {
       const response = await this.agent.app.bsky.actor.searchActorsTypeahead({
         term: options.term,
         limit: options.limit
       });
-
-      return {
-        actors: response.data.actors as ActorSearchResult[]
-      };
+      return { actors: response.data.actors as ActorSearchResult[] };
     } catch (error) {
       throw new Error(`Failed to search actors: ${formatError(error)}`);
     }
   }
 
   /**
-   * Search posts by keyword - core AI search engine functionality
+   * Search posts by keyword
    */
   async searchPosts(options: SearchPostsOptions): Promise<SearchPostsResult> {
     try {
@@ -387,7 +342,6 @@ export class BlueskyClient {
         author: options.author,
         lang: options.lang
       });
-
       return {
         posts: response.data.posts as unknown as PostView[],
         cursor: response.data.cursor
@@ -412,13 +366,14 @@ export class BlueskyClient {
   /**
    * Get likes for a post
    */
-  async getLikes(uri: string, cursor?: string, limit = 50): Promise<{ likes: unknown[]; cursor?: string }> {
+  async getLikes(
+    uri: string,
+    cursor?: string,
+    limit = 50
+  ): Promise<{ likes: unknown[]; cursor?: string }> {
     try {
       const response = await this.agent.app.bsky.feed.getLikes({ uri, cursor, limit });
-      return {
-        likes: response.data.likes,
-        cursor: response.data.cursor
-      };
+      return { likes: response.data.likes, cursor: response.data.cursor };
     } catch (error) {
       throw new Error(`Failed to get likes: ${formatError(error)}`);
     }
@@ -427,7 +382,11 @@ export class BlueskyClient {
   /**
    * Get reposted by for a post
    */
-  async getRepostedBy(uri: string, cursor?: string, limit = 50): Promise<{ repostedBy: ProfileView[]; cursor?: string }> {
+  async getRepostedBy(
+    uri: string,
+    cursor?: string,
+    limit = 50
+  ): Promise<{ repostedBy: ProfileView[]; cursor?: string }> {
     try {
       const response = await this.agent.app.bsky.feed.getRepostedBy({ uri, cursor, limit });
       return {
@@ -443,10 +402,7 @@ export class BlueskyClient {
    * Like a post
    */
   async like(uri: string, cid: string): Promise<{ uri: string }> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
       const result = await this.agent.like(uri, cid);
       return { uri: result.uri };
@@ -459,10 +415,7 @@ export class BlueskyClient {
    * Repost a post
    */
   async repost(uri: string, cid: string): Promise<{ uri: string }> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
       const result = await this.agent.repost(uri, cid);
       return { uri: result.uri };
@@ -472,15 +425,11 @@ export class BlueskyClient {
   }
 
   /**
-   * Unlike a post by deleting the Like record (requires auth).
-   * The uri must be the like record URI returned from like(), e.g.
-   * at://did:plc:.../app.bsky.feed.like/rkey — not the original post URI.
+   * Unlike a post by deleting the Like record.
+   * The uri must be the like record URI returned from like().
    */
   async deleteLike(uri: string): Promise<void> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
       await this.agent.deleteLike(uri);
     } catch (error) {
@@ -489,15 +438,11 @@ export class BlueskyClient {
   }
 
   /**
-   * Un-repost a post by deleting the Repost record (requires auth).
-   * The uri must be the repost record URI returned from repost(), e.g.
-   * at://did:plc:.../app.bsky.feed.repost/rkey — not the original post URI.
+   * Un-repost a post by deleting the Repost record.
+   * The uri must be the repost record URI returned from repost().
    */
   async deleteRepost(uri: string): Promise<void> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
       await this.agent.deleteRepost(uri);
     } catch (error) {
@@ -510,13 +455,10 @@ export class BlueskyClient {
    */
   async testConnectivity(): Promise<{ connected: boolean; error?: string }> {
     try {
-      await this.agent.com.atproto.server.describeServer({});
+      await this.rpcGet('com.atproto.server.describeServer');
       return { connected: true };
     } catch (error) {
-      return {
-        connected: false,
-        error: formatError(error)
-      };
+      return { connected: false, error: formatError(error) };
     }
   }
 
@@ -524,28 +466,20 @@ export class BlueskyClient {
    * Get suggested users to follow
    */
   async getSuggestions(limit = 10): Promise<{ actors: ActorSearchResult[] }> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
       const response = await this.agent.getSuggestions({ limit });
-      return {
-        actors: response.data.actors as ActorSearchResult[]
-      };
+      return { actors: response.data.actors as ActorSearchResult[] };
     } catch (error) {
       throw new Error(`Failed to get suggestions: ${formatError(error)}`);
     }
   }
 
   /**
-   * Get account preferences (requires auth)
+   * Get account preferences
    */
   async getPreferences(): Promise<{ preferences: unknown[] }> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
       const response = await this.agent.app.bsky.actor.getPreferences({});
       return { preferences: response.data.preferences };
@@ -554,15 +488,15 @@ export class BlueskyClient {
     }
   }
 
+  // AppView-hosted lexicons (bookmarks, drafts, chat, age assurance).
+  // These are proxied through the user's PDS by the DPoP fetch that
+  // bindOAuthSession() installs over appviewRequest().
+
   /**
-   * Create a private bookmark for a post (requires auth)
-   * Only app.bsky.feed.post records are supported
+   * Create a private bookmark for a post.
    */
   async createBookmark(uri: string, cid: string): Promise<{ id: string } | undefined> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
       return await this.appviewRequest<{ id: string }>(
         'app.bsky.bookmark.createBookmark',
@@ -575,32 +509,25 @@ export class BlueskyClient {
   }
 
   /**
-   * Delete a bookmark by URI (requires auth)
+   * Delete a bookmark by URI
    */
   async deleteBookmark(uri: string): Promise<void> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
-      await this.appviewRequest<void>(
-        'app.bsky.bookmark.deleteBookmark',
-        undefined,
-        { uri }
-      );
+      await this.appviewRequest<void>('app.bsky.bookmark.deleteBookmark', undefined, { uri });
     } catch (error) {
       throw new Error(`Failed to delete bookmark: ${formatError(error)}`);
     }
   }
 
   /**
-   * Get all private bookmarks for the account (requires auth)
+   * Get all private bookmarks for the account
    */
-  async getBookmarks(cursor?: string, limit = 50): Promise<{ bookmarks: unknown[]; cursor?: string }> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+  async getBookmarks(
+    cursor?: string,
+    limit = 50
+  ): Promise<{ bookmarks: unknown[]; cursor?: string }> {
+    this.requireAuth();
     try {
       const result = await this.appviewRequest<{ bookmarks: unknown[]; cursor?: string }>(
         'app.bsky.bookmark.getBookmarks',
@@ -613,32 +540,22 @@ export class BlueskyClient {
   }
 
   /**
-   * Initiate Age Assurance flow for the account (requires auth)
+   * Initiate Age Assurance flow for the account
    */
   async beginAgeAssurance(): Promise<unknown> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
-      return await this.appviewRequest<unknown>(
-        'app.bsky.ageassurance.begin',
-        undefined,
-        {}
-      );
+      return await this.appviewRequest<unknown>('app.bsky.ageassurance.begin', undefined, {});
     } catch (error) {
       throw new Error(`Failed to begin age assurance: ${formatError(error)}`);
     }
   }
 
   /**
-   * Get Age Assurance configuration for the account (requires auth)
+   * Get Age Assurance configuration for the account
    */
   async getAgeAssuranceConfig(): Promise<unknown> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
       return await this.appviewRequest<unknown>('app.bsky.ageassurance.getConfig');
     } catch (error) {
@@ -647,13 +564,10 @@ export class BlueskyClient {
   }
 
   /**
-   * Get current Age Assurance state/status for the account (requires auth)
+   * Get current Age Assurance state/status for the account
    */
   async getAgeAssuranceState(): Promise<unknown> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
       return await this.appviewRequest<unknown>('app.bsky.ageassurance.getState');
     } catch (error) {
@@ -662,12 +576,203 @@ export class BlueskyClient {
   }
 
   /**
-   * Delete a post by URI or rkey (requires auth)
+   * Create a draft post.
+   *
+   * The lexicon's input shape is { draft: { posts: [{ text, ... }], langs? } },
+   * not a flat { text, langs } body, so the single text/langs accepted here is
+   * wrapped into a one-item draft.posts[] array before sending.
+   */
+  async createDraft(
+    text: string,
+    langs?: string[],
+    images?: ProcessedImage[]
+  ): Promise<{ id: string }> {
+    this.requireAuth();
+    try {
+      const draftPost: Record<string, unknown> = { text };
+      if (images && images.length > 0) {
+        draftPost.embed = await this.buildImageEmbed(images);
+      }
+
+      const draft: Record<string, unknown> = { posts: [draftPost] };
+      if (langs && langs.length > 0) draft.langs = langs;
+
+      const result = await this.appviewRequest<{ id: string }>(
+        'app.bsky.draft.createDraft',
+        undefined,
+        { draft }
+      );
+      if (!result) throw new Error('Empty response from createDraft');
+      return result;
+    } catch (error) {
+      throw new Error(`Failed to create draft: ${formatError(error)}`);
+    }
+  }
+
+  /**
+   * Update an existing draft post
+   */
+  async updateDraft(
+    id: string,
+    text: string,
+    langs?: string[],
+    images?: ProcessedImage[]
+  ): Promise<void> {
+    this.requireAuth();
+    try {
+      const draftPost: Record<string, unknown> = { text };
+      if (images && images.length > 0) {
+        draftPost.embed = await this.buildImageEmbed(images);
+      }
+
+      const draftWithId: Record<string, unknown> = {
+        id,
+        draft: {
+          posts: [draftPost],
+          ...(langs && langs.length > 0 ? { langs } : {})
+        }
+      };
+
+      await this.appviewRequest<void>('app.bsky.draft.updateDraft', undefined, {
+        draft: draftWithId
+      });
+    } catch (error) {
+      throw new Error(`Failed to update draft: ${formatError(error)}`);
+    }
+  }
+
+  /**
+   * Delete a draft by ID
+   */
+  async deleteDraft(id: string): Promise<void> {
+    this.requireAuth();
+    try {
+      await this.appviewRequest<void>('app.bsky.draft.deleteDraft', undefined, { id });
+    } catch (error) {
+      throw new Error(`Failed to delete draft: ${formatError(error)}`);
+    }
+  }
+
+  /**
+   * Get drafts
+   */
+  async getDrafts(cursor?: string, limit = 50): Promise<{ drafts: unknown[]; cursor?: string }> {
+    this.requireAuth();
+    try {
+      const result = await this.appviewRequest<{ drafts: unknown[]; cursor?: string }>(
+        'app.bsky.draft.getDrafts',
+        { cursor, limit }
+      );
+      return result ?? { drafts: [] };
+    } catch (error) {
+      throw new Error(`Failed to get drafts: ${formatError(error)}`);
+    }
+  }
+
+  /**
+   * Add a reaction to a chat message
+   */
+  async addReaction(convoId: string, messageId: string, value: string): Promise<unknown> {
+    this.requireAuth();
+    try {
+      return await this.appviewRequest<unknown>('chat.bsky.convo.addReaction', undefined, {
+        convoId,
+        messageId,
+        value
+      });
+    } catch (error) {
+      throw new Error(`Failed to add reaction: ${formatError(error)}`);
+    }
+  }
+
+  /**
+   * Remove a reaction from a chat message
+   */
+  async removeReaction(convoId: string, messageId: string, value: string): Promise<unknown> {
+    this.requireAuth();
+    try {
+      return await this.appviewRequest<unknown>('chat.bsky.convo.removeReaction', undefined, {
+        convoId,
+        messageId,
+        value
+      });
+    } catch (error) {
+      throw new Error(`Failed to remove reaction: ${formatError(error)}`);
+    }
+  }
+
+  /**
+   * Get messages in a conversation
+   */
+  async getMessages(
+    convoId: string,
+    cursor?: string,
+    limit = 50
+  ): Promise<{ messages: unknown[]; cursor?: string }> {
+    this.requireAuth();
+    try {
+      const result = await this.appviewRequest<{ messages: unknown[]; cursor?: string }>(
+        'chat.bsky.convo.getMessages',
+        { convoId, cursor, limit }
+      );
+      return result ?? { messages: [] };
+    } catch (error) {
+      throw new Error(`Failed to get messages: ${formatError(error)}`);
+    }
+  }
+
+  /**
+   * Send a message in a conversation
+   */
+  async sendMessage(convoId: string, message: { text: string }): Promise<unknown> {
+    this.requireAuth();
+    try {
+      return await this.appviewRequest<unknown>('chat.bsky.convo.sendMessage', undefined, {
+        convoId,
+        message
+      });
+    } catch (error) {
+      throw new Error(`Failed to send message: ${formatError(error)}`);
+    }
+  }
+
+  /**
+   * Send a batch of messages to multiple conversations
+   */
+  async sendMessageBatch(
+    items: Array<{ convoId: string; message: { text: string } }>
+  ): Promise<unknown> {
+    this.requireAuth();
+    try {
+      return await this.appviewRequest<unknown>('chat.bsky.convo.sendMessageBatch', undefined, {
+        items
+      });
+    } catch (error) {
+      throw new Error(`Failed to send message batch: ${formatError(error)}`);
+    }
+  }
+
+  /**
+   * Get message context for moderation
+   */
+  async getMessageContext(messageId: string): Promise<unknown> {
+    this.requireAuth();
+    try {
+      return await this.appviewRequest<unknown>('chat.bsky.moderation.getMessageContext', {
+        messageId
+      });
+    } catch (error) {
+      throw new Error(`Failed to get message context: ${formatError(error)}`);
+    }
+  }
+
+  // PDS lexicons without typed helpers.
+
+  /**
+   * Delete a post by URI or rkey
    */
   async deletePost(uriOrRkey: string): Promise<void> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
+    this.requireAuth();
 
     let rkey: string;
     if (uriOrRkey.startsWith('at://')) {
@@ -681,348 +786,52 @@ export class BlueskyClient {
     }
 
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (this.agent.api as any).xrpc.call(
-        'com.atproto.repo.deleteRecord',
-        {},
-        {
-          repo: this.session!.did,
-          collection: 'app.bsky.feed.post',
-          rkey
-        },
-        { encoding: 'application/json' }
-      );
+      await this.rpcPost('com.atproto.repo.deleteRecord', {
+        repo: this.session!.did,
+        collection: 'app.bsky.feed.post',
+        rkey
+      });
     } catch (error) {
       throw new Error(`Failed to delete post: ${formatError(error)}`);
     }
   }
 
   /**
-   * Create a draft post (requires auth).
-   *
-   * Routed through appviewRequest() rather than agent.api.xrpc.call(), because
-   * app.bsky.draft.* is a "private storage / stash" lexicon hosted on the
-   * AppView (api.bsky.app) — the same family as app.bsky.bookmark.* and
-   * app.bsky.ageassurance.*. Calling it through the PDS-bound agent.api.xrpc
-   * client throws "Lexicon not found", exactly like the bookmark endpoints
-   * did before they were switched to appviewRequest().
-   *
-   * The lexicon's input shape is { draft: { posts: [{ text, ... }], langs? } } —
-   * not a flat { text, langs } body — so the single text/langs we accept here
-   * is wrapped into a one-item draft.posts[] array before sending.
+   * Search accounts via the admin endpoint (requires admin privileges)
    */
-  async createDraft(text: string, langs?: string[], images?: ProcessedImage[]): Promise<{ id: string }> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+  async searchAccounts(
+    options: SearchAccountsInput
+  ): Promise<{ accounts: unknown[]; cursor?: string }> {
+    this.requireAuth();
     try {
-      const draftPost: Record<string, unknown> = { text };
-
-      if (images && images.length > 0) {
-        const uploadedImages = await Promise.all(
-          images.map(async (img) => {
-            const blob = await this.uploadImage(img.data, img.mimeType);
-            const imageObj: Record<string, unknown> = {
-              image: blob,
-              alt: img.alt
-            };
-            if (img.aspectRatio) {
-              imageObj.aspectRatio = img.aspectRatio;
-            }
-            return imageObj;
-          })
-        );
-        draftPost.embed = {
-          $type: 'app.bsky.embed.images',
-          images: uploadedImages
-        };
-      }
-
-      const draft: Record<string, unknown> = {
-        posts: [draftPost]
-      };
-
-      if (langs && langs.length > 0) {
-        draft.langs = langs;
-      }
-
-      const result = await this.appviewRequest<{ id: string }>(
-        'app.bsky.draft.createDraft',
-        undefined,
-        { draft }
-      );
-
-      if (!result) {
-        throw new Error('Empty response from createDraft');
-      }
-
-      return result;
-    } catch (error) {
-      throw new Error(`Failed to create draft: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * Update an existing draft post (requires auth).
-   * Routed through appviewRequest() — see createDraft() for why app.bsky.draft.*
-   * must go to the AppView (api.bsky.app) instead of the PDS.
-   */
-  async updateDraft(id: string, text: string, langs?: string[], images?: ProcessedImage[]): Promise<void> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
-    try {
-      const draftPost: Record<string, unknown> = { text };
-
-      if (images && images.length > 0) {
-        const uploadedImages = await Promise.all(
-          images.map(async (img) => {
-            const blob = await this.uploadImage(img.data, img.mimeType);
-            const imageObj: Record<string, unknown> = {
-              image: blob,
-              alt: img.alt
-            };
-            if (img.aspectRatio) {
-              imageObj.aspectRatio = img.aspectRatio;
-            }
-            return imageObj;
-          })
-        );
-        draftPost.embed = {
-          $type: 'app.bsky.embed.images',
-          images: uploadedImages
-        };
-      }
-
-      const draftWithId: Record<string, unknown> = {
-        id,
-        draft: {
-          posts: [draftPost],
-          ...(langs && langs.length > 0 ? { langs } : {})
-        }
-      };
-
-      await this.appviewRequest<void>(
-        'app.bsky.draft.updateDraft',
-        undefined,
-        { draft: draftWithId }
-      );
-    } catch (error) {
-      throw new Error(`Failed to update draft: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * Delete a draft by ID (requires auth).
-   * Routed through appviewRequest() — see createDraft() for why app.bsky.draft.*
-   * must go to the AppView (api.bsky.app) instead of the PDS.
-   */
-  async deleteDraft(id: string): Promise<void> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
-    try {
-      await this.appviewRequest<void>(
-        'app.bsky.draft.deleteDraft',
-        undefined,
-        { id }
-      );
-    } catch (error) {
-      throw new Error(`Failed to delete draft: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * Get drafts (requires auth).
-   * Routed through appviewRequest() — see createDraft() for why app.bsky.draft.*
-   * must go to the AppView (api.bsky.app) instead of the PDS.
-   */
-  async getDrafts(cursor?: string, limit = 50): Promise<{ drafts: unknown[]; cursor?: string }> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
-    try {
-      const result = await this.appviewRequest<{ drafts: unknown[]; cursor?: string }>(
-        'app.bsky.draft.getDrafts',
-        { cursor, limit }
-      );
-      return result ?? { drafts: [] };
-    } catch (error) {
-      throw new Error(`Failed to get drafts: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * Search accounts via admin endpoint (requires auth)
-   */
-  async searchAccounts(options: SearchAccountsInput): Promise<{ accounts: unknown[]; cursor?: string }> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const response = await (this.agent.api as any).xrpc.get(
-        'com.atproto.admin.searchAccounts',
-        {
-          email: options.email,
-          cursor: options.cursor,
-          limit: options.limit
-        }
-      );
-      return {
-        accounts: response.data.accounts ?? [],
-        cursor: response.data.cursor
-      };
+      const data = await this.rpcGet('com.atproto.admin.searchAccounts', {
+        email: options.email,
+        cursor: options.cursor,
+        limit: options.limit
+      });
+      return { accounts: data.accounts ?? [], cursor: data.cursor };
     } catch (error) {
       throw new Error(`Failed to search accounts: ${formatError(error)}`);
     }
   }
 
   /**
-   * Add a reaction to a chat message (requires auth)
-   */
-  async addReaction(convoId: string, messageId: string, value: string): Promise<unknown> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
-    try {
-      return await this.appviewRequest<unknown>(
-        'chat.bsky.convo.addReaction',
-        undefined,
-        { convoId, messageId, value }
-      );
-    } catch (error) {
-      throw new Error(`Failed to add reaction: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * Remove a reaction from a chat message (requires auth)
-   */
-  async removeReaction(convoId: string, messageId: string, value: string): Promise<unknown> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
-    try {
-      return await this.appviewRequest<unknown>(
-        'chat.bsky.convo.removeReaction',
-        undefined,
-        { convoId, messageId, value }
-      );
-    } catch (error) {
-      throw new Error(`Failed to remove reaction: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * Get messages in a conversation (requires auth)
-   */
-  async getMessages(convoId: string, cursor?: string, limit = 50): Promise<{ messages: unknown[]; cursor?: string }> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
-    try {
-      const result = await this.appviewRequest<{ messages: unknown[]; cursor?: string }>(
-        'chat.bsky.convo.getMessages',
-        { convoId, cursor, limit }
-      );
-      return result ?? { messages: [] };
-    } catch (error) {
-      throw new Error(`Failed to get messages: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * Send a message in a conversation (requires auth)
-   */
-  async sendMessage(convoId: string, message: { text: string }): Promise<unknown> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
-    try {
-      return await this.appviewRequest<unknown>(
-        'chat.bsky.convo.sendMessage',
-        undefined,
-        { convoId, message }
-      );
-    } catch (error) {
-      throw new Error(`Failed to send message: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * Send a batch of messages to multiple conversations (requires auth)
-   */
-  async sendMessageBatch(items: Array<{ convoId: string; message: { text: string } }>): Promise<unknown> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
-    try {
-      return await this.appviewRequest<unknown>(
-        'chat.bsky.convo.sendMessageBatch',
-        undefined,
-        { items }
-      );
-    } catch (error) {
-      throw new Error(`Failed to send message batch: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * Get message context for moderation (requires auth)
-   */
-  async getMessageContext(messageId: string): Promise<unknown> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
-    try {
-      return await this.appviewRequest<unknown>(
-        'chat.bsky.moderation.getMessageContext',
-        { messageId }
-      );
-    } catch (error) {
-      throw new Error(`Failed to get message context: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * Update the email address on the account (requires auth)
+   * Update the email address on the account
    */
   async updateEmail(email: string, token?: string): Promise<void> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
-      const body: Record<string, unknown> = { email };
-      if (token) {
-        body.token = token;
-      }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (this.agent.api as any).xrpc.call(
-        'com.atproto.server.updateEmail',
-        {},
-        body,
-        { encoding: 'application/json' }
-      );
+      await this.rpcPost('com.atproto.server.updateEmail', {
+        email,
+        ...(token ? { token } : {})
+      });
     } catch (error) {
       throw new Error(`Failed to update email: ${formatError(error)}`);
     }
   }
 
   /**
-   * Send an email as an admin (requires auth + admin privileges)
+   * Send an email as an admin (requires admin privileges)
    */
   async adminSendEmail(
     recipientDid: string,
@@ -1031,399 +840,187 @@ export class BlueskyClient {
     senderDid?: string,
     comment?: string
   ): Promise<unknown> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
-      const body: Record<string, unknown> = { recipientDid, content };
-      if (subject) body.subject = subject;
-      if (senderDid) body.senderDid = senderDid;
-      if (comment) body.comment = comment;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const response = await (this.agent.api as any).xrpc.call(
-        'com.atproto.server.sendEmail',
-        {},
-        body,
-        { encoding: 'application/json' }
-      );
-      return response.data;
+      return await this.rpcPost('com.atproto.server.sendEmail', {
+        recipientDid,
+        content,
+        ...(subject ? { subject } : {}),
+        ...(senderDid ? { senderDid } : {}),
+        ...(comment ? { comment } : {})
+      });
     } catch (error) {
       throw new Error(`Failed to send admin email: ${formatError(error)}`);
     }
   }
 
   /**
-   * Confirm an email address using a token (requires auth)
+   * Confirm an email address using a token
    */
   async confirmEmail(email: string, token: string): Promise<void> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (this.agent.api as any).xrpc.call(
-        'com.atproto.server.confirmEmail',
-        {},
-        { email, token },
-        { encoding: 'application/json' }
-      );
+      await this.rpcPost('com.atproto.server.confirmEmail', { email, token });
     } catch (error) {
       throw new Error(`Failed to confirm email: ${formatError(error)}`);
     }
   }
 
   /**
-   * Create a new account (no auth required)
-   */
-  async createAccount(
-    email: string,
-    handle: string,
-    password: string,
-    inviteCode?: string,
-    verificationCode?: string,
-    verificationPhone?: string,
-    plcOp?: Record<string, unknown>
-  ): Promise<{ did: string; handle: string; accessJwt: string; refreshJwt: string }> {
-    try {
-      const body: Record<string, unknown> = { email, handle, password };
-      if (inviteCode) body.inviteCode = inviteCode;
-      if (verificationCode) body.verificationCode = verificationCode;
-      if (verificationPhone) body.verificationPhone = verificationPhone;
-      if (plcOp) body.plcOp = plcOp;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const response = await (this.agent.api as any).xrpc.call(
-        'com.atproto.server.createAccount',
-        {},
-        body,
-        { encoding: 'application/json' }
-      );
-      return response.data;
-    } catch (error) {
-      throw new Error(`Failed to create account: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * Create an app password (requires auth)
+   * Create an app password
    */
   async createAppPassword(name: string): Promise<unknown> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const response = await (this.agent.api as any).xrpc.call(
-        'com.atproto.server.createAppPassword',
-        {},
-        { name },
-        { encoding: 'application/json' }
-      );
-      return response.data;
+      return await this.rpcPost('com.atproto.server.createAppPassword', { name });
     } catch (error) {
       throw new Error(`Failed to create app password: ${formatError(error)}`);
     }
   }
 
   /**
-   * Create an invite code (requires auth)
+   * Create an invite code
    */
   async createInviteCode(forAccount?: string, useCount?: number): Promise<{ code: string }> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
-      const body: Record<string, unknown> = {};
-      if (forAccount) body.forAccount = forAccount;
-      if (useCount !== undefined) body.useCount = useCount;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const response = await (this.agent.api as any).xrpc.call(
-        'com.atproto.server.createInviteCode',
-        {},
-        body,
-        { encoding: 'application/json' }
-      );
-      return response.data;
+      return await this.rpcPost('com.atproto.server.createInviteCode', {
+        ...(forAccount ? { forAccount } : {}),
+        ...(useCount !== undefined ? { useCount } : {})
+      });
     } catch (error) {
       throw new Error(`Failed to create invite code: ${formatError(error)}`);
     }
   }
 
   /**
-   * Create multiple invite codes (requires auth)
+   * Create multiple invite codes
    */
   async createInviteCodes(
     codeCount?: number,
     useCount?: number,
     forAccounts?: string[]
   ): Promise<{ codes: { account: string; code: string }[] }> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
-      const body: Record<string, unknown> = {};
-      if (codeCount !== undefined) body.codeCount = codeCount;
-      if (useCount !== undefined) body.useCount = useCount;
-      if (forAccounts) body.forAccounts = forAccounts;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const response = await (this.agent.api as any).xrpc.call(
-        'com.atproto.server.createInviteCodes',
-        {},
-        body,
-        { encoding: 'application/json' }
-      );
-      return response.data;
+      return await this.rpcPost('com.atproto.server.createInviteCodes', {
+        ...(codeCount !== undefined ? { codeCount } : {}),
+        ...(useCount !== undefined ? { useCount } : {}),
+        ...(forAccounts ? { forAccounts } : {})
+      });
     } catch (error) {
       throw new Error(`Failed to create invite codes: ${formatError(error)}`);
     }
   }
 
   /**
-   * Create a session (no auth required)
-   */
-  async createSession(
-    identifier: string,
-    password: string,
-    authFactorToken?: string
-  ): Promise<{ did: string; handle: string; email?: string; accessJwt: string; refreshJwt: string }> {
-    try {
-      const body: Record<string, unknown> = { identifier, password };
-      if (authFactorToken) body.authFactorToken = authFactorToken;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const response = await (this.agent.api as any).xrpc.call(
-        'com.atproto.server.createSession',
-        {},
-        body,
-        { encoding: 'application/json' }
-      );
-      return response.data;
-    } catch (error) {
-      throw new Error(`Failed to create session: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * Deactivate an account (requires auth)
+   * Deactivate the account
    */
   async deactivateAccount(deleteAfter?: string): Promise<void> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
-      const body: Record<string, unknown> = {};
-      if (deleteAfter) body.deleteAfter = deleteAfter;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (this.agent.api as any).xrpc.call(
-        'com.atproto.server.deactivateAccount',
-        {},
-        body,
-        { encoding: 'application/json' }
-      );
+      await this.rpcPost('com.atproto.server.deactivateAccount', {
+        ...(deleteAfter ? { deleteAfter } : {})
+      });
     } catch (error) {
       throw new Error(`Failed to deactivate account: ${formatError(error)}`);
     }
   }
 
   /**
-   * Delete an account (requires auth)
+   * Permanently delete the account
    */
   async deleteAccount(password: string): Promise<void> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (this.agent.api as any).xrpc.call(
-        'com.atproto.server.deleteAccount',
-        {},
-        { password },
-        { encoding: 'application/json' }
-      );
+      await this.rpcPost('com.atproto.server.deleteAccount', { password });
     } catch (error) {
       throw new Error(`Failed to delete account: ${formatError(error)}`);
     }
   }
 
   /**
-   * Delete the current session (requires auth)
-   */
-  async deleteSession(): Promise<void> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (this.agent.api as any).xrpc.call(
-        'com.atproto.server.deleteSession',
-        {},
-        {},
-        { encoding: 'application/json' }
-      );
-    } catch (error) {
-      throw new Error(`Failed to delete session: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * Describe the server (no auth required)
+   * Describe the server
    */
   async describeServer(): Promise<unknown> {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const response = await (this.agent.api as any).xrpc.get('com.atproto.server.describeServer', {});
-      return response.data;
+      return await this.rpcGet('com.atproto.server.describeServer');
     } catch (error) {
       throw new Error(`Failed to describe server: ${formatError(error)}`);
     }
   }
 
   /**
-   * Get account invite codes (requires auth)
+   * Get account invite codes
    */
-  async getAccountInviteCodes(includeUsed?: boolean, createAvailable?: boolean): Promise<unknown> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+  async getAccountInviteCodes(
+    includeUsed?: boolean,
+    createAvailable?: boolean
+  ): Promise<unknown> {
+    this.requireAuth();
     try {
-      const params: Record<string, unknown> = {};
-      if (includeUsed !== undefined) params.includeUsed = includeUsed;
-      if (createAvailable !== undefined) params.createAvailable = createAvailable;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const response = await (this.agent.api as any).xrpc.get(
-        'com.atproto.server.getAccountInviteCodes',
-        params
-      );
-      return response.data;
+      return await this.rpcGet('com.atproto.server.getAccountInviteCodes', {
+        includeUsed,
+        createAvailable
+      });
     } catch (error) {
       throw new Error(`Failed to get account invite codes: ${formatError(error)}`);
     }
   }
 
   /**
-   * Get a service auth token (requires auth)
+   * Get a service auth token
    */
   async getServiceAuth(aud: string, lxm?: string, exp?: number): Promise<{ token: string }> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
-      const params: Record<string, unknown> = { aud };
-      if (lxm) params.lxm = lxm;
-      if (exp !== undefined) params.exp = exp;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const response = await (this.agent.api as any).xrpc.get(
-        'com.atproto.server.getServiceAuth',
-        params
-      );
-      return response.data;
+      return await this.rpcGet('com.atproto.server.getServiceAuth', { aud, lxm, exp });
     } catch (error) {
       throw new Error(`Failed to get service auth: ${formatError(error)}`);
     }
   }
 
   /**
-   * Get the current session (requires auth)
+   * Get the current session
    */
   async getSession(): Promise<{ did: string; handle: string; email?: string }> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const response = await (this.agent.api as any).xrpc.get('com.atproto.server.getSession', {});
-      return response.data;
+      return await this.rpcGet('com.atproto.server.getSession');
     } catch (error) {
       throw new Error(`Failed to get session: ${formatError(error)}`);
     }
   }
 
   /**
-   * List app passwords (requires auth)
+   * List app passwords
    */
   async listAppPasswords(): Promise<unknown> {
-    if (!this.isLoggedIn()) {
-      throw new Error('Not authenticated');
-    }
-
+    this.requireAuth();
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const response = await (this.agent.api as any).xrpc.get(
-        'com.atproto.server.listAppPasswords',
-        {}
-      );
-      return response.data;
+      return await this.rpcGet('com.atproto.server.listAppPasswords');
     } catch (error) {
       throw new Error(`Failed to list app passwords: ${formatError(error)}`);
     }
   }
 
   /**
-   * Refresh the current session (requires auth + refreshJwt)
-   */
-  async refreshSession(): Promise<{ accessJwt: string; refreshJwt: string; handle: string; did: string }> {
-    if (!this.isLoggedIn() || !this.session) {
-      throw new Error('Not authenticated');
-    }
-
-    try {
-      const response = await fetch(`${this.serviceUrl}/xrpc/com.atproto.server.refreshSession`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${this.session.refreshJwt}`
-        }
-      });
-
-      if (!response.ok) {
-        let message = `Refresh session failed: ${response.status} ${response.statusText}`;
-        try {
-          const errorData = (await response.json()) as { message?: string; error?: string };
-          if (errorData?.message) {
-            message = errorData.message;
-          } else if (errorData?.error) {
-            message = errorData.error;
-          }
-        } catch {
-          // ignore JSON parse errors
-        }
-        throw new Error(message);
-      }
-
-      const data = (await response.json()) as { accessJwt: string; refreshJwt: string; handle: string; did: string };
-      this.session = {
-        accessJwt: data.accessJwt,
-        refreshJwt: data.refreshJwt,
-        did: data.did,
-        handle: data.handle
-      };
-      return data;
-    } catch (error) {
-      throw new Error(`Failed to refresh session: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * Logout and clear session
+   * Forget the bound session on this instance.
+   *
+   * This does not revoke anything upstream: OAuth tokens are owned by the
+   * session store, and revoking them is the connected account's job, not a
+   * per-request client's.
    */
   logout(): void {
-    this.agent = new BskyAgent({ service: this.serviceUrl });
     this.session = null;
     this.isAuthenticated = false;
   }
 }
 
 /**
- * Factory function to create a new Bluesky client instance
+ * Factory function to create a new Bluesky client instance.
+ * A session must be bound with bindOAuthSession() before use.
  */
-export function createBlueskyClient(serviceUrl?: string): BlueskyClient {
-  return new BlueskyClient(serviceUrl);
+export function createBlueskyClient(): BlueskyClient {
+  return new BlueskyClient();
 }
