@@ -1,5 +1,10 @@
 /**
  * MCP Tool Definitions - JSON Schema definitions for AI agent consumption
+ *
+ * 52 tools. Four were removed when this server moved to OAuth-only auth:
+ * create_session and create_account require a password, and delete_session and
+ * refresh_session fight the OAuth layer that owns token lifecycle (Bluesky
+ * refresh tokens are single-use, so a manual refresh can orphan a session).
  */
 
 export interface ToolDefinition {
@@ -14,7 +19,7 @@ export interface ToolDefinition {
 
 export const toolDefinitions: ToolDefinition[] = [
 
-  // ── Posts ──────────────────────────────────────────────────────────────────
+  // ── Posts ────────────────────────────────────────────────────────────────
 
   {
     name: 'create_post',
@@ -62,7 +67,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'get_posts',
-    description: 'Fetch specific posts by their AT Protocol URIs (up to 25 at once). Works with or without authentication.',
+    description: 'Fetch specific posts by their AT Protocol URIs (up to 25 at once).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -73,7 +78,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'get_likes',
-    description: 'Get the list of users who liked a specific post. Works with or without authentication.',
+    description: 'Get the list of users who liked a specific post.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -86,7 +91,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'get_reposted_by',
-    description: 'Get the list of users who reposted a specific post. Works with or without authentication.',
+    description: 'Get the list of users who reposted a specific post.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -123,7 +128,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'unlike_post',
-    description: 'Remove a like from a post on Bluesky by deleting the Like record. Pass the like record URI returned by like_post (e.g. at://did:.../app.bsky.feed.like/rkey), not the original post URI. Requires authentication.',
+    description: 'Remove a like from a post by deleting the Like record. Pass the like record URI returned by like_post (e.g. at://did:.../app.bsky.feed.like/rkey), not the original post URI. Requires authentication.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -134,7 +139,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'unrepost_post',
-    description: 'Remove a repost on Bluesky by deleting the Repost record. Pass the repost record URI returned by repost_post (e.g. at://did:.../app.bsky.feed.repost/rkey), not the original post URI. Requires authentication.',
+    description: 'Remove a repost by deleting the Repost record. Pass the repost record URI returned by repost_post, not the original post URI. Requires authentication.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -145,7 +150,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'delete_post',
-    description: 'Delete a post on Bluesky by its AT Protocol URI or record key (rkey). Requires authentication.',
+    description: 'Delete one of your own posts by its AT Protocol URI or record key (rkey). Requires authentication.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -155,11 +160,11 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Feeds ──────────────────────────────────────────────────────────────────
+  // ── Feeds ────────────────────────────────────────────────────────────────
 
   {
     name: 'get_timeline',
-    description: "Get the authenticated user's home timeline (posts from followed accounts). Requires authentication.",
+    description: "Get the connected account's home timeline (posts from followed accounts). Requires authentication.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -170,7 +175,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'get_feed',
-    description: 'Get posts from a custom feed generator using its at:// URI. Works with or without authentication.',
+    description: 'Get posts from a custom feed generator using its at:// URI.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -183,7 +188,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'get_author_feed',
-    description: "Get posts from a specific user's profile feed. Can filter by type. Works with or without authentication.",
+    description: "Get posts from a specific user's profile feed. Can filter by type.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -202,7 +207,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'get_thread',
-    description: 'Get a full post thread including replies and parent posts. Works with or without authentication.',
+    description: 'Get a full post thread including replies and parent posts.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -214,11 +219,11 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Profiles ───────────────────────────────────────────────────────────────
+  // ── Profiles ─────────────────────────────────────────────────────────────
 
   {
     name: 'get_profile',
-    description: 'Get detailed profile for a single user (bio, follower counts, avatar, etc.). Works with or without authentication.',
+    description: 'Get detailed profile for a single user (bio, follower counts, avatar, etc.).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -229,7 +234,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'get_profiles',
-    description: 'Get detailed profiles for multiple users at once (batch, up to 25). Works with or without authentication.',
+    description: 'Get detailed profiles for multiple users at once (batch, up to 25).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -253,7 +258,7 @@ export const toolDefinitions: ToolDefinition[] = [
 
   {
     name: 'search_actors',
-    description: 'Search for Bluesky users by name or handle. Works with or without authentication.',
+    description: 'Search for Bluesky users by name or handle.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -265,7 +270,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'search_actors_typeahead',
-    description: 'Quick autocomplete search for Bluesky users as you type. Works with or without authentication.',
+    description: 'Quick autocomplete search for Bluesky users as you type.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -277,7 +282,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'search_posts',
-    description: 'Search posts by keyword, hashtag, author, language, or mention. Works with or without authentication.',
+    description: 'Search posts by keyword, hashtag, author, language, or mention.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -294,7 +299,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'search_accounts',
-    description: 'Search accounts via the admin endpoint (requires admin privileges on the PDS). Requires authentication.',
+    description: 'Search accounts via the admin endpoint. Requires admin privileges on the PDS, so this fails for ordinary accounts.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -305,7 +310,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Account / Preferences ──────────────────────────────────────────────────
+  // ── Account / Preferences ─────────────────────────────────────────────────
 
   {
     name: 'get_preferences',
@@ -317,7 +322,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'update_email',
-    description: 'Update the email address associated with the authenticated account. Requires authentication.',
+    description: 'Update the email address associated with the connected account. Requires authentication.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -328,11 +333,11 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Server / Account Management ─────────────────────────────────────────────
+  // ── Server / Account Management ────────────────────────────────────────────
 
   {
     name: 'admin_send_email',
-    description: 'Send an email as a PDS admin. Requires authentication and admin privileges.',
+    description: 'Send an email as a PDS admin. Requires admin privileges, so this fails for ordinary accounts.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -358,25 +363,8 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
   {
-    name: 'create_account',
-    description: 'Create a new Bluesky/AT Protocol account. No authentication required.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        email: { type: 'string', description: 'Email address for the new account', format: 'email' },
-        handle: { type: 'string', description: 'Desired handle (e.g. name.bsky.social)' },
-        password: { type: 'string', description: 'Account password' },
-        inviteCode: { type: 'string', description: 'Invite code (if required by the PDS)' },
-        verificationCode: { type: 'string', description: 'Verification code (optional)' },
-        verificationPhone: { type: 'string', description: 'Verification phone number (optional)' },
-        plcOp: { type: 'object', description: 'PLC operation object (optional)' }
-      },
-      required: ['email', 'handle', 'password']
-    }
-  },
-  {
     name: 'create_app_password',
-    description: 'Create a new app password for the authenticated account. Requires authentication.',
+    description: 'Create a new app password for the connected account. Note this server itself authenticates with OAuth; app passwords are only useful for other tools. Requires authentication.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -387,7 +375,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'create_invite_code',
-    description: 'Create a single invite code. Requires authentication.',
+    description: 'Create a single invite code. Requires authentication, and only works on PDSes that issue invites.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -398,7 +386,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'create_invite_codes',
-    description: 'Create multiple invite codes at once. Requires authentication.',
+    description: 'Create multiple invite codes at once. Requires authentication, and only works on PDSes that issue invites.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -409,21 +397,8 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
   {
-    name: 'create_session',
-    description: 'Create an authentication session with a Bluesky PDS. Returns access and refresh tokens. No authentication required.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        identifier: { type: 'string', description: 'Handle or email address' },
-        password: { type: 'string', description: 'Account password or app password' },
-        authFactorToken: { type: 'string', description: 'Two-factor auth token (optional)' }
-      },
-      required: ['identifier', 'password']
-    }
-  },
-  {
     name: 'deactivate_account',
-    description: 'Deactivate the authenticated account. Requires authentication.',
+    description: 'Deactivate the connected account. Destructive. Requires authentication.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -433,7 +408,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'delete_account',
-    description: 'Permanently delete the authenticated account. Requires authentication.',
+    description: 'Permanently delete the connected account. Irreversible, and requires the account password as confirmation. Requires authentication.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -443,16 +418,8 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
   {
-    name: 'delete_session',
-    description: 'Delete the current authentication session (invalidate access token). Requires authentication.',
-    inputSchema: {
-      type: 'object',
-      properties: {}
-    }
-  },
-  {
     name: 'describe_server',
-    description: 'Get information about the PDS server (available user domains, contact info, etc.). No authentication required.',
+    description: 'Get information about the PDS server (available user domains, contact info, etc.).',
     inputSchema: {
       type: 'object',
       properties: {}
@@ -460,7 +427,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'get_account_invite_codes',
-    description: 'Get invite codes associated with the authenticated account. Requires authentication.',
+    description: 'Get invite codes associated with the connected account. Requires authentication.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -471,7 +438,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'get_service_auth',
-    description: 'Get a signed JWT token for service-to-service authentication. Requires authentication.',
+    description: 'Get a signed JWT for service-to-service authentication with another atproto service. Requires authentication.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -484,7 +451,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'get_session',
-    description: 'Get details about the current authenticated session. Requires authentication.',
+    description: 'Get details about the connected account as the PDS sees it (DID, handle, email). Requires authentication.',
     inputSchema: {
       type: 'object',
       properties: {}
@@ -492,22 +459,14 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'list_app_passwords',
-    description: 'List all app passwords for the authenticated account. Requires authentication.',
-    inputSchema: {
-      type: 'object',
-      properties: {}
-    }
-  },
-  {
-    name: 'refresh_session',
-    description: 'Refresh the current authentication session using the refresh token. Returns new access and refresh tokens. Requires authentication.',
+    description: 'List all app passwords for the connected account. Requires authentication.',
     inputSchema: {
       type: 'object',
       properties: {}
     }
   },
 
-  // ── Chat ───────────────────────────────────────────────────────────────────
+  // ── Chat ─────────────────────────────────────────────────────────────────
 
   {
     name: 'add_reaction',
@@ -608,7 +567,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Bookmarks ──────────────────────────────────────────────────────────────
+  // ── Bookmarks ─────────────────────────────────────────────────────────────
 
   {
     name: 'create_bookmark',
@@ -737,11 +696,11 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Age Assurance ──────────────────────────────────────────────────────────
+  // ── Age Assurance ───────────────────────────────────────────────────────────
 
   {
     name: 'begin_age_assurance',
-    description: 'Initiate the Age Assurance flow for the authenticated account. Used for age verification on Bluesky. Requires authentication.',
+    description: 'Initiate the Age Assurance flow for the connected account. Requires authentication.',
     inputSchema: {
       type: 'object',
       properties: {}
@@ -749,7 +708,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'get_age_assurance_config',
-    description: 'Get the Age Assurance configuration for the current account (provider info, requirements, etc.). Requires authentication.',
+    description: 'Get the Age Assurance configuration for the connected account (provider info, requirements, etc.). Requires authentication.',
     inputSchema: {
       type: 'object',
       properties: {}
@@ -757,18 +716,18 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'get_age_assurance_state',
-    description: 'Get the current Age Assurance state/status for the authenticated account (verified, pending, etc.). Requires authentication.',
+    description: 'Get the current Age Assurance state for the connected account (verified, pending, etc.). Requires authentication.',
     inputSchema: {
       type: 'object',
       properties: {}
     }
   },
 
-  // ── Blob Upload ────────────────────────────────────────────────────────────
+  // ── Blob Upload ─────────────────────────────────────────────────────────────
 
   {
     name: 'upload_blob',
-    description: 'Upload a blob (image, video, or other file) to the authenticated user\'s PDS repository via com.atproto.repo.uploadBlob. Returns a blob reference that can be used in post embeds, profile media, or other record types. Supports base64 data URIs, HTTPS URLs, and local file paths. Requires authentication.',
+    description: 'Upload a blob (image, video, or other file) to the connected account\'s PDS repository. Returns a blob reference that can be used in post embeds, profile media, or other record types. Supports base64 data URIs, HTTPS URLs, and local file paths. Requires authentication.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -789,7 +748,7 @@ export const toolDefinitions: ToolDefinition[] = [
 
   {
     name: 'test_connectivity',
-    description: 'Test the connection to Bluesky and check if authentication is working correctly.',
+    description: 'Test the connection to Bluesky and report which account is authenticated. Start here when debugging.',
     inputSchema: {
       type: 'object',
       properties: {}
