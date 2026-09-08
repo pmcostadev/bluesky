@@ -21,6 +21,16 @@ import { KEYS, kvDel, kvGet, kvSet, withLock } from './store';
 
 const STATE_TTL_S = 15 * 60;
 
+/**
+ * The keyset argument is typed against the `Key` class from `@atproto/jwk`, and
+ * `Key` has a protected member. npm resolves two copies of that package (one
+ * under jwk-jose, one under oauth-client-node), so TypeScript treats the two
+ * `Key` classes as unrelated nominal types even though they are structurally
+ * and behaviourally identical at runtime. This alias documents that bridge, and
+ * keeps the assertion in exactly one place instead of scattering `any`.
+ */
+type KeysetArg = ConstructorParameters<typeof NodeOAuthClient>[0]['keyset'];
+
 let cached: Promise<NodeOAuthClient> | null = null;
 
 function privateKeyJwk(): string {
@@ -78,7 +88,7 @@ export function getOAuthClient(): Promise<NodeOAuthClient> {
 
     return new NodeOAuthClient({
       clientMetadata: clientMetadata(),
-      keyset: [key],
+      keyset: [key] as unknown as KeysetArg,
 
       stateStore: {
         async set(k: string, state: NodeSavedState) {
