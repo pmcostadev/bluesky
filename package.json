@@ -1,6 +1,6 @@
 {
   "name": "bluesky-mcp",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -10,8 +10,7 @@
   },
   "dependencies": {
     "@atproto/api": "^0.13.8",
-    "@atproto/jwk-jose": "^0.1.2",
-    "@atproto/oauth-client-node": "^0.2.3",
+    "@atproto/oauth-client-node": "^0.3.0",
     "@modelcontextprotocol/sdk": "^1.10.3",
     "better-react-mathjax": "^1.0.3",
     "cors": "^2.8.5",
@@ -30,8 +29,12 @@
     "@types/react-dom": "^19.0.0",
     "typescript": "^5.7.3"
   },
+  "comments": {
+    "@atproto/jwk": "Pinned through overrides so exactly one copy exists. Two copies mean a JoseKey is not an instanceof the Key class the OAuth client checks against, the keyset silently ends up empty, and the confidential client refuses to build. @atproto/jwk-jose is intentionally NOT a direct dependency: JoseKey is imported from @atproto/oauth-client-node, which re-exports it from its own resolved copy."
+  },
   "overrides": {
     "qs": ">=6.15.2",
-    "postcss": ">=8.5.10"
+    "postcss": ">=8.5.10",
+    "@atproto/jwk": "^0.4.0"
   }
 }
