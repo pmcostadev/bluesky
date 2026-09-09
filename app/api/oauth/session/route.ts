@@ -1,4 +1,4 @@
-import { getOAuthClient } from '@/oauth/client';
+import { clientMetadata, getOAuthClient, isConfidential, publicJwks } from '@/oauth/client';
 import { KEYS, kvDel, kvGet } from '@/oauth/store';
 
 export const runtime = 'nodejs';
@@ -6,6 +6,7 @@ export const runtime = 'nodejs';
 /**
  * Session diagnostics and reset.
  *
+ *   GET /api/oauth/session?key=...                  report the client mode
  *   GET /api/oauth/session?key=...&did=...          inspect the granted scope
  *   GET /api/oauth/session?key=...&did=...&reset=1  delete it
  *
@@ -36,8 +37,30 @@ export async function GET(req: Request) {
     );
   }
 
+  // No DID: report how this deployment is registered. This is the quickest way
+  // to confirm the confidential keys actually loaded.
   if (!did) {
-    return Response.json({ error: 'missing_did', hint: 'Pass ?did=did:plc:...' }, { status: 400 });
+    const confidential = isConfidential();
+    let keyCount = 0;
+    let keyError: string | null = null;
+    try {
+      keyCount = (await publicJwks()).keys.length;
+    } catch (e) {
+      keyError = e instanceof Error ? e.message : String(e);
+    }
+
+    const meta = clientMetadata() as Record<string, unknown>;
+
+    return Response.json({
+      clientMode: confidential ? 'confidential' : 'public',
+      sessionLifetime: confidential ? 'up to 180 days per refresh token' : '14 days (atproto cap)',
+      tokenEndpointAuthMethod: meta.token_endpoint_auth_method ?? null,
+      jwksUri: meta.jwks_uri ?? null,
+      signingKeys: keyCount,
+      keyError,
+      requestedScope: process.env.BLUESKY_SCOPE ?? '(default)',
+      hint: 'Add ?did=did:plc:... to inspect one stored session.'
+    });
   }
 
   const stored = await kvGet<Record<string, any>>(KEYS.session(did));
@@ -72,6 +95,7 @@ export async function GET(req: Request) {
   return Response.json({
     did,
     stored: true,
+    clientMode: isConfidential() ? 'confidential' : 'public',
     grantedScope: tokenSet.scope ?? null,
     hasChatScope: String(tokenSet.scope ?? '').includes('chat.bsky'),
     tokenType: tokenSet.token_type ?? null,
