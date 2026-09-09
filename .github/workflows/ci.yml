@@ -6,14 +6,15 @@ on:
   pull_request:
     branches: [main]
 
-# A second push should cancel the first run rather than queue behind it.
+# A second push cancels the first run rather than queueing behind it. Cancelled
+# runs show as cancelled, not failed.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Typecheck and build
+    name: Build and typecheck
     runs-on: ubuntu-latest
 
     steps:
@@ -22,20 +23,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: npm
 
-      # npm ci respects the lockfile exactly, which is the point: it catches a
-      # dependency resolving differently than it did locally. This project has
-      # been bitten by exactly that (see the @atproto/jwk note in package.json).
+      # `npm install`, not `npm ci`. This project pins @atproto/jwk through
+      # `overrides` to keep exactly one copy in the tree, and npm ci refuses to
+      # run at all when a committed lockfile predates a change like that. Fresh
+      # resolution is also what Vercel does, so CI matches production.
       - name: Install
-        run: npm ci
+        run: npm install
 
-      - name: Typecheck
-        run: npx tsc --noEmit
-
-      # Build with placeholder env vars. None of them are real: the point is to
-      # prove the bundle compiles and every route can be built, not to reach any
-      # external service.
+      # Build first: it generates next-env.d.ts and the route types that a
+      # standalone tsc run needs. Running tsc before this fails on missing
+      # generated types rather than on anything real. `next build` also
+      # typechecks, so a type error fails here too.
       - name: Build
         run: npm run build
         env:
@@ -43,3 +42,6 @@ jobs:
           OAUTH_SIGNING_SECRET: ci-placeholder-secret-not-used-anywhere-32
           KV_REST_API_URL: https://ci.example
           KV_REST_API_TOKEN: ci-placeholder
+
+      - name: Typecheck
+        run: npx tsc --noEmit
