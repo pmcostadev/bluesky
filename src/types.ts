@@ -1,21 +1,15 @@
 /**
  * Bluesky MCP Server - Type Definitions
- * Secure remote MCP for managing Bluesky with external credential injection
+ *
+ * This server authenticates with AT Protocol OAuth only. There are no password
+ * or app-password credential types: a DPoP-bound session is resolved per request
+ * and bound onto the client.
  */
 
-export interface BlueskyCredentials {
-  identifier: string;
-  password: string;
-}
-
-// MCP server configuration loaded from environment variables
-export interface MCPConfiguration {
-  identifier: string;
-  password: string;
-}
-
 export interface AuthenticatedSession {
+  /** Kept for shape compatibility; empty under OAuth. */
   accessJwt: string;
+  /** Kept for shape compatibility; empty under OAuth. */
   refreshJwt: string;
   did: string;
   handle: string;
@@ -169,10 +163,6 @@ export interface SearchPostsResult {
 }
 
 // MCP Tool Input/Output Types
-export interface ToolInput<T = unknown> {
-  params: T;
-  credentials?: BlueskyCredentials;
-}
 
 export interface ToolResult<T = unknown> {
   success: boolean;
@@ -232,11 +222,6 @@ export interface SearchActorsInput {
 export interface GetFeedInput {
   feed: string;
   cursor?: string;
-  limit?: number;
-}
-
-export interface SearchPostsForAIInput {
-  query: string;
   limit?: number;
 }
 
@@ -338,48 +323,12 @@ export interface ConfirmEmailInput {
   token: string;
 }
 
-export interface CreateAccountInput {
-  email: string;
-  handle: string;
-  password: string;
-  inviteCode?: string;
-  verificationCode?: string;
-  verificationPhone?: string;
-  plcOp?: Record<string, unknown>;
-}
-
-export interface CreateAppPasswordInput {
-  name: string;
-}
-
-export interface CreateInviteCodeInput {
-  forAccount?: string;
-  useCount?: number;
-}
-
-export interface CreateInviteCodesInput {
-  codeCount?: number;
-  useCount?: number;
-  forAccounts?: string[];
-}
-
-export interface CreateSessionInput {
-  identifier: string;
-  password: string;
-  authFactorToken?: string;
-}
-
 export interface DeactivateAccountInput {
   deleteAfter?: string;
 }
 
 export interface DeleteAccountInput {
   password: string;
-}
-
-export interface GetAccountInviteCodesInput {
-  includeUsed?: boolean;
-  createAvailable?: boolean;
 }
 
 export interface GetServiceAuthInput {
@@ -391,6 +340,24 @@ export interface GetServiceAuthInput {
 export interface UploadBlobInput {
   source: string;
   mimeType?: string;
+}
+
+/**
+ * Age assurance takes an ISO 3166-1 alpha-2 country code, which drives which
+ * verification provider and rules apply.
+ */
+export interface AgeAssuranceStateInput {
+  countryCode: string;
+}
+
+/**
+ * Starting age assurance needs an email for the verification link, plus the
+ * country and the language to send it in.
+ */
+export interface BeginAgeAssuranceInput {
+  email: string;
+  countryCode: string;
+  language?: string;
 }
 
 // Rate limiting types
