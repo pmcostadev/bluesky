@@ -3,19 +3,26 @@ import { corsHeaders, originBlocked, preflight } from '@/cors';
 export const runtime = 'nodejs';
 
 /**
- * Start a Composio connection with our own landing page.
+ * Start a Composio connection.
  *
- * Composio's dashboard "Connect" button always returns the user to
- * dashboard.composio.dev, because the landing page is set by a `callback_url`
- * passed when the connection is created, and the dashboard passes its own.
- * The only way to control it is to create the connection ourselves.
+ *   POST /api/connect/link  { authConfigId?, userId?, callbackUrl? }
+ *     -> { redirectUrl, connectionId }
  *
- * POST /api/connect/link { authConfigId?, userId? }
- *   -> { redirectUrl, connectionId, callbackUrl }
+ * ---
+ * This endpoint deliberately does NOT send a callback_url by default.
  *
- * The caller opens redirectUrl (usually in a popup) and polls
- * /api/connect/status?connectionId=... until it reports ACTIVE. /connect.js
- * does both for you.
+ * Composio's hosted link page is the last document in the popup, and it closes
+ * that popup itself. Passing a callback_url replaces that page with one of ours,
+ * which takes the ending away from the party that owns the window: our page
+ * cannot reliably close a popup whose opener COOP has already severed, so the
+ * window just sits there.
+ *
+ * Product Hunt has no callback page at all and its popup closes cleanly. That is
+ * not a coincidence, it is the reason. Overriding the landing page bought us
+ * nothing and cost us the close.
+ *
+ * A caller that genuinely wants its own landing page can pass callbackUrl
+ * explicitly, and owns the consequences.
  */
 
 const COMPOSIO_API = 'https://backend.composio.dev/api/v3';
@@ -24,15 +31,6 @@ function requireEnv(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`${name} is not set on this deployment.`);
   return v;
-}
-
-function publicOrigin(req: Request): string {
-  const explicit = process.env.OAUTH_PUBLIC_ORIGIN;
-  if (explicit) return explicit.replace(/\/$/, '');
-  const h = req.headers;
-  const host = h.get('x-forwarded-host') ?? h.get('host') ?? 'localhost:3000';
-  const proto = h.get('x-forwarded-proto') ?? 'https';
-  return `${proto}://${host}`;
 }
 
 export async function OPTIONS(req: Request) {
@@ -49,7 +47,7 @@ export async function POST(req: Request) {
     );
   }
 
-  let body: { authConfigId?: string; userId?: string } = {};
+  let body: { authConfigId?: string; userId?: string; callbackUrl?: string } = {};
   try {
     body = await req.json();
   } catch {
@@ -69,7 +67,16 @@ export async function POST(req: Request) {
   }
 
   const userId = body.userId ?? process.env.COMPOSIO_USER_ID ?? 'default';
-  const callbackUrl = `${publicOrigin(req)}/connected`;
+
+  // Opt-in only. Unset means Composio keeps its own landing page, and its own
+  // popup close.
+  const callbackUrl = body.callbackUrl ?? process.env.COMPOSIO_CALLBACK_URL ?? null;
+
+  const payload: Record<string, unknown> = {
+    user_id: userId,
+    auth_config_id: authConfigId
+  };
+  if (callbackUrl) payload.callback_url = callbackUrl;
 
   try {
     const res = await fetch(`${COMPOSIO_API}/connected_accounts/link`, {
@@ -78,11 +85,7 @@ export async function POST(req: Request) {
         'x-api-key': apiKey,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify({
-        user_id: userId,
-        auth_config_id: authConfigId,
-        callback_url: callbackUrl
-      }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(15_000)
     });
 
