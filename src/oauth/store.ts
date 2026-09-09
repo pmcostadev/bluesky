@@ -71,6 +71,32 @@ export async function kvDel(key: string): Promise<void> {
   await command(['DEL', key]);
 }
 
+/**
+ * Every key matching a glob pattern.
+ *
+ * Uses SCAN rather than KEYS so it stays safe on a shared instance, and pages
+ * until the cursor returns to 0.
+ */
+export async function kvKeys(pattern: string): Promise<string[]> {
+  const found = new Set<string>();
+  let cursor = '0';
+
+  do {
+    const [next, batch] = await command<[string, string[]]>([
+      'SCAN',
+      cursor,
+      'MATCH',
+      pattern,
+      'COUNT',
+      100
+    ]);
+    for (const key of batch ?? []) found.add(key);
+    cursor = next;
+  } while (cursor !== '0' && found.size < 1000);
+
+  return Array.from(found);
+}
+
 /** Best-effort lock so two concurrent refreshes don't race a single-use token. */
 export async function withLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const lockKey = `lock:${key}`;
@@ -93,5 +119,6 @@ export async function withLock<T>(key: string, fn: () => Promise<T>): Promise<T>
 export const KEYS = {
   state: (k: string) => `bsky:state:${k}`,
   session: (did: string) => `bsky:session:${did}`,
-  pending: (k: string) => `bsky:pending:${k}`
+  pending: (k: string) => `bsky:pending:${k}`,
+  sessionPattern: 'bsky:session:*'
 };
