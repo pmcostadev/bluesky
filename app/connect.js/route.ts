@@ -162,21 +162,30 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
         var timer = null;
         var channel = null;
 
-        try {
-          channel = new BroadcastChannel(CHANNEL);
-          channel.onmessage = function (event) {
-            var d = event.data || {};
-            if (d.source === 'bluesky-mcp') poll(true);
-          };
-        } catch (e) {
-          // BroadcastChannel unsupported; polling covers it
+        function schedule(delay) {
+          if (timer) window.clearTimeout(timer);
+          timer = window.setTimeout(poll, delay);
+        }
+
+        function announced(data) {
+          if (!data || data.source !== 'bluesky-mcp') return;
+          // The callback page reached our domain. Confirm with the server
+          // rather than trusting the message.
+          schedule(0);
         }
 
         function onMessage(event) {
           if (event.origin !== ORIGIN) return;
-          var d = event.data || {};
-          if (d.source !== 'bluesky-mcp') return;
-          poll(true);
+          announced(event.data);
+        }
+
+        try {
+          channel = new BroadcastChannel(CHANNEL);
+          channel.onmessage = function (event) {
+            announced(event.data);
+          };
+        } catch (e) {
+          // BroadcastChannel unsupported; polling covers it
         }
 
         function cleanup() {
@@ -218,12 +227,11 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
           reject(new Error(message));
         }
 
-        function poll(immediate) {
+        function poll() {
           if (settled) return;
-          if (timer) window.clearTimeout(timer);
 
           if (!connectionId) {
-            // Nothing authoritative to poll. Resolve on the announcement alone.
+            // Nothing authoritative to poll against.
             return succeed('UNKNOWN');
           }
 
@@ -242,19 +250,12 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
               return fail('The connection was not completed in time. Start it again.');
             }
 
-            timer = window.setTimeout(poll, intervalMs);
+            schedule(intervalMs);
           });
         }
 
         window.addEventListener('message', onMessage);
-        timer = window.setTimeout(poll, immediateDelay(immediateFlag()));
-
-        function immediateFlag() {
-          return false;
-        }
-        function immediateDelay(flag) {
-          return flag ? 0 : intervalMs;
-        }
+        schedule(intervalMs);
       });
     });
   }
