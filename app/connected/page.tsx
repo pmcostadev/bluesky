@@ -8,49 +8,84 @@ import { useEffect, useState } from 'react';
  * Composio appends ?status=success&connected_account_id=... (snake_case via
  * link(), camelCase via the legacy initiate()), so both spellings are read.
  *
- * If this page was opened as a popup it closes itself, which is the behaviour
- * the Composio dashboard never gave us.
+ * ---
+ * Why this page does NOT check window.opener before closing itself:
+ *
+ * Composio's pages send Cross-Origin-Opener-Policy: same-origin. When a popup
+ * navigates through a COOP document, the browser severs the opener relationship
+ * for the remaining life of that window: window.opener is null here even though
+ * the window really was opened by script, and the opener's own handle to this
+ * window starts reporting closed === true.
+ *
+ * Gating auto-close behind window.opener therefore disabled it in exactly the
+ * case it was written for. Self-closing still works after severance, so this
+ * page always attempts it, tells anyone listening through every channel that
+ * survives, and only falls back to a manual button if the browser refuses.
  */
+
+const CHANNEL = 'bluesky-mcp-connect';
+
 export default function Connected() {
-  const [countdown, setCountdown] = useState(3);
-  const [isPopup, setIsPopup] = useState(false);
   const [status, setStatus] = useState<'success' | 'failed' | 'unknown'>('unknown');
   const [accountId, setAccountId] = useState<string | null>(null);
+  const [stuck, setStuck] = useState(false);
 
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
     const raw = (p.get('status') ?? '').toLowerCase();
-    setStatus(raw === 'success' ? 'success' : raw === 'failed' ? 'failed' : 'unknown');
-    setAccountId(p.get('connected_account_id') ?? p.get('connectedAccountId'));
+    const resolved = raw === 'success' ? 'success' : raw === 'failed' ? 'failed' : 'unknown';
+    const id = p.get('connected_account_id') ?? p.get('connectedAccountId');
 
-    // window.opener is set when we were opened by another window.
-    const popup = Boolean(window.opener && window.opener !== window);
-    setIsPopup(popup);
+    setStatus(resolved);
+    setAccountId(id);
 
-    if (!popup) return;
+    const payload = {
+      source: 'bluesky-mcp',
+      type: 'composio-connected',
+      status: raw || 'unknown',
+      connectedAccountId: id
+    };
 
-    // Let the opener know, in case it wants to refresh state.
+    // 1. Same-origin openers and tabs. Survives COOP severance because it does
+    //    not depend on a window handle.
     try {
-      window.opener.postMessage(
-        { source: 'bluesky-mcp', type: 'composio-connected', status: raw },
-        '*'
-      );
+      new BroadcastChannel(CHANNEL).postMessage(payload);
     } catch {
-      // cross-origin opener; the close below still works
+      // BroadcastChannel unsupported
     }
 
-    const tick = window.setInterval(() => {
-      setCountdown((n) => {
-        if (n <= 1) {
-          window.clearInterval(tick);
-          window.close();
-          return 0;
-        }
-        return n - 1;
-      });
-    }, 1000);
+    // 2. Storage event, for same-origin listeners without BroadcastChannel.
+    try {
+      window.localStorage.setItem(CHANNEL, JSON.stringify({ ...payload, at: Date.now() }));
+    } catch {
+      // storage blocked
+    }
 
-    return () => window.clearInterval(tick);
+    // 3. postMessage, for the cross-origin opener when it did survive.
+    try {
+      window.opener?.postMessage(payload, '*');
+    } catch {
+      // opener severed or cross-origin
+    }
+
+    // Then close. No opener check: see the note above.
+    const attempt = () => {
+      try {
+        window.close();
+      } catch {
+        // not script-closable
+      }
+    };
+
+    attempt();
+    const retry = window.setTimeout(attempt, 400);
+    // If we are still rendering after this, the browser refused to close us.
+    const giveUp = window.setTimeout(() => setStuck(true), 1400);
+
+    return () => {
+      window.clearTimeout(retry);
+      window.clearTimeout(giveUp);
+    };
   }, []);
 
   const failed = status === 'failed';
@@ -76,15 +111,10 @@ export default function Connected() {
           </p>
         )}
 
-        {isPopup ? (
-          <p className="meta">
-            closing this window in {countdown}
-            {countdown === 1 ? ' second' : ' seconds'}\u2026
-          </p>
+        {stuck ? (
+          <p className="meta">You can close this window.</p>
         ) : (
-          <a className="btn" href="/">
-            Back to the server
-          </a>
+          <p className="meta">Closing\u2026</p>
         )}
       </div>
 
@@ -146,20 +176,6 @@ export default function Connected() {
           font-size: 12.5px;
           color: #eef3fb;
           word-break: break-all;
-        }
-        .btn {
-          display: inline-block;
-          margin-top: 22px;
-          padding: 11px 20px;
-          border-radius: 10px;
-          background: #1185fe;
-          color: #fff;
-          text-decoration: none;
-          font-size: 14px;
-          font-weight: 600;
-        }
-        .btn:hover {
-          background: #3aa0ff;
         }
       `}</style>
     </main>
