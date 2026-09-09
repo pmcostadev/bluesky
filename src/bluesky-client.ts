@@ -11,6 +11,11 @@
  *
  * `agent.api.xrpc.*` must not be used: it exists on the legacy password agent
  * but not on the OAuth one, and calling it throws "xrpc.get is not a function".
+ *
+ * Some PDS endpoints are password-only by design and answer "OAuth credentials
+ * are not supported for this endpoint": createAppPassword, createInviteCode(s)
+ * and getAccountInviteCodes. They are intentionally absent here rather than
+ * present and permanently failing.
  */
 
 import { Agent, AppBskyFeedPost } from '@atproto/api';
@@ -88,7 +93,6 @@ export class BlueskyClient {
 
   /**
    * Call a lexicon that has no typed helper on the agent.
-   * Works on both the OAuth agent and the legacy one.
    */
   private async rpcGet<T = any>(nsid: string, params: Record<string, unknown> = {}): Promise<T> {
     const clean = Object.fromEntries(
@@ -104,13 +108,13 @@ export class BlueskyClient {
   }
 
   /**
-   * Make a request to a lexicon hosted on the AppView rather than the PDS
+   * Make a request to a lexicon hosted on a service other than the PDS
    * (bookmarks, drafts, chat, age assurance).
    *
    * This implementation is replaced at runtime by bindOAuthSession(), which
-   * substitutes a DPoP-signed fetch that proxies through the user's PDS. The
-   * body here only runs if something calls the client without binding a
-   * session first, so it fails loudly instead of silently unauthenticated.
+   * substitutes a DPoP-signed fetch that proxies through the user's PDS to the
+   * right service. The body here only runs if something calls the client
+   * without binding a session first, so it fails loudly.
    */
   private async appviewRequest<T>(
     _nsid: string,
@@ -118,7 +122,7 @@ export class BlueskyClient {
     _body?: Record<string, unknown>
   ): Promise<T> {
     throw new Error(
-      'No OAuth session is bound to this client, so AppView requests cannot be signed.'
+      'No OAuth session is bound to this client, so proxied requests cannot be signed.'
     );
   }
 
@@ -488,9 +492,8 @@ export class BlueskyClient {
     }
   }
 
-  // AppView-hosted lexicons (bookmarks, drafts, chat, age assurance).
-  // These are proxied through the user's PDS by the DPoP fetch that
-  // bindOAuthSession() installs over appviewRequest().
+  // Lexicons hosted off the PDS (bookmarks, drafts, chat, age assurance).
+  // Proxied by the DPoP fetch that bindOAuthSession() installs.
 
   /**
    * Create a private bookmark for a post.
@@ -540,12 +543,23 @@ export class BlueskyClient {
   }
 
   /**
-   * Initiate Age Assurance flow for the account
+   * Initiate Age Assurance flow for the account.
+   *
+   * The lexicon requires an email to send the verification link to and an
+   * ISO 3166-1 alpha-2 country code, which selects the provider and rules.
    */
-  async beginAgeAssurance(): Promise<unknown> {
+  async beginAgeAssurance(
+    email: string,
+    countryCode: string,
+    language = 'en'
+  ): Promise<unknown> {
     this.requireAuth();
     try {
-      return await this.appviewRequest<unknown>('app.bsky.ageassurance.begin', undefined, {});
+      return await this.appviewRequest<unknown>('app.bsky.ageassurance.begin', undefined, {
+        email,
+        countryCode,
+        language
+      });
     } catch (error) {
       throw new Error(`Failed to begin age assurance: ${formatError(error)}`);
     }
@@ -564,12 +578,15 @@ export class BlueskyClient {
   }
 
   /**
-   * Get current Age Assurance state/status for the account
+   * Get current Age Assurance state for the account.
+   * Requires an ISO 3166-1 alpha-2 country code.
    */
-  async getAgeAssuranceState(): Promise<unknown> {
+  async getAgeAssuranceState(countryCode: string): Promise<unknown> {
     this.requireAuth();
     try {
-      return await this.appviewRequest<unknown>('app.bsky.ageassurance.getState');
+      return await this.appviewRequest<unknown>('app.bsky.ageassurance.getState', {
+        countryCode
+      });
     } catch (error) {
       throw new Error(`Failed to get age assurance state: ${formatError(error)}`);
     }
@@ -867,53 +884,6 @@ export class BlueskyClient {
   }
 
   /**
-   * Create an app password
-   */
-  async createAppPassword(name: string): Promise<unknown> {
-    this.requireAuth();
-    try {
-      return await this.rpcPost('com.atproto.server.createAppPassword', { name });
-    } catch (error) {
-      throw new Error(`Failed to create app password: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * Create an invite code
-   */
-  async createInviteCode(forAccount?: string, useCount?: number): Promise<{ code: string }> {
-    this.requireAuth();
-    try {
-      return await this.rpcPost('com.atproto.server.createInviteCode', {
-        ...(forAccount ? { forAccount } : {}),
-        ...(useCount !== undefined ? { useCount } : {})
-      });
-    } catch (error) {
-      throw new Error(`Failed to create invite code: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * Create multiple invite codes
-   */
-  async createInviteCodes(
-    codeCount?: number,
-    useCount?: number,
-    forAccounts?: string[]
-  ): Promise<{ codes: { account: string; code: string }[] }> {
-    this.requireAuth();
-    try {
-      return await this.rpcPost('com.atproto.server.createInviteCodes', {
-        ...(codeCount !== undefined ? { codeCount } : {}),
-        ...(useCount !== undefined ? { useCount } : {}),
-        ...(forAccounts ? { forAccounts } : {})
-      });
-    } catch (error) {
-      throw new Error(`Failed to create invite codes: ${formatError(error)}`);
-    }
-  }
-
-  /**
    * Deactivate the account
    */
   async deactivateAccount(deleteAfter?: string): Promise<void> {
@@ -947,24 +917,6 @@ export class BlueskyClient {
       return await this.rpcGet('com.atproto.server.describeServer');
     } catch (error) {
       throw new Error(`Failed to describe server: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * Get account invite codes
-   */
-  async getAccountInviteCodes(
-    includeUsed?: boolean,
-    createAvailable?: boolean
-  ): Promise<unknown> {
-    this.requireAuth();
-    try {
-      return await this.rpcGet('com.atproto.server.getAccountInviteCodes', {
-        includeUsed,
-        createAvailable
-      });
-    } catch (error) {
-      throw new Error(`Failed to get account invite codes: ${formatError(error)}`);
     }
   }
 
