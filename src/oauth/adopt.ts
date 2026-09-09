@@ -4,8 +4,8 @@ import type { DpopSession } from './resolve';
 /**
  * Bridge between an atproto OAuth session and the existing BlueskyClient.
  *
- * BlueskyClient was written around app-password auth: it logs in, keeps the
- * returned JWTs, and sends them as plain bearer tokens. OAuth sessions cannot
+ * BlueskyClient was written around app-password auth: it logged in, kept the
+ * returned JWTs, and sent them as plain bearer tokens. OAuth sessions cannot
  * work that way, because every request must be signed with the DPoP key the
  * tokens are bound to.
  *
@@ -14,7 +14,7 @@ import type { DpopSession } from './resolve';
  *
  *   1. the internal agent, replaced with the DPoP-bound OAuth Agent, which
  *      covers every tool that goes through `agent.*` (the large majority), and
- *   2. the AppView escape hatch, replaced with a DPoP fetch that proxies
+ *   2. the service-proxy escape hatch, replaced with a DPoP fetch that proxies
  *      through the user's PDS for lexicons the PDS does not host itself
  *      (bookmarks, drafts, chat, age assurance).
  *
@@ -23,8 +23,20 @@ import type { DpopSession } from './resolve';
  * models meet.
  */
 
-/** The AppView's service DID, for proxying lexicons the PDS does not host. */
+/** The AppView's service DID: bookmarks, drafts, age assurance. */
 export const APPVIEW_PROXY = 'did:web:api.bsky.app#bsky_appview';
+
+/**
+ * The chat service's DID. DMs live on a separate service from the AppView, and
+ * proxying chat.bsky.* to the AppView fails with a missing-scope error, so the
+ * target is chosen per lexicon.
+ */
+export const CHAT_PROXY = 'did:web:api.bsky.chat#bsky_chat';
+
+/** Pick the right service DID for a lexicon. */
+export function proxyFor(nsid: string): string {
+  return nsid.startsWith('chat.bsky.') ? CHAT_PROXY : APPVIEW_PROXY;
+}
 
 type ClientInternals = {
   agent: unknown;
@@ -41,7 +53,7 @@ type ClientInternals = {
  * Point an existing BlueskyClient at an OAuth session.
  *
  * `handle` is optional: the DID is the stable identifier and the only thing the
- * client actually needs. A handle can be resolved later with getProfile.
+ * client actually needs. The handle is resolved on demand by resolveHandle().
  */
 export function bindOAuthSession(
   client: object,
@@ -78,14 +90,14 @@ export function bindOAuthSession(
       headers: {
         'Content-Type': 'application/json',
         Accept: 'application/json',
-        // Ask the PDS to forward this to the AppView, which hosts these lexicons.
-        'atproto-proxy': APPVIEW_PROXY
+        // Ask the PDS to forward this to whichever service hosts the lexicon.
+        'atproto-proxy': proxyFor(nsid)
       },
       body: body ? JSON.stringify(body) : undefined
     });
 
     if (!res.ok) {
-      let message = `AppView request failed: ${res.status} ${res.statusText}`;
+      let message = `Request to ${nsid} failed: ${res.status} ${res.statusText}`;
       try {
         const err = (await res.json()) as { message?: string; error?: string };
         if (err?.message) message = err.message;
