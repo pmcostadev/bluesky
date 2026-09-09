@@ -1,5 +1,5 @@
 import { clientMetadata, getOAuthClient, isConfidential, publicJwks } from '@/oauth/client';
-import { KEYS, kvDel, kvGet } from '@/oauth/store';
+import { KEYS, kvDel, kvGet, kvKeys } from '@/oauth/store';
 
 export const runtime = 'nodejs';
 
@@ -7,15 +7,17 @@ export const runtime = 'nodejs';
  * Session diagnostics and reset.
  *
  *   GET /api/oauth/session?key=...                  report the client mode
+ *   GET /api/oauth/session?key=...&resetAll=1       delete every stored session
  *   GET /api/oauth/session?key=...&did=...          inspect the granted scope
- *   GET /api/oauth/session?key=...&did=...&reset=1  delete it
+ *   GET /api/oauth/session?key=...&did=...&reset=1  delete one session
  *
  * Why this exists: reconnecting in an MCP client does not necessarily re-run
  * the Bluesky authorization. If the client only refreshes its own token, the
- * stored atproto session survives with whatever scope it was granted
- * originally, so a newly added scope (like transition:chat.bsky) never takes
- * effect. Deleting the stored session forces the next authorize to go all the
- * way to a real consent screen.
+ * stored atproto session survives with whatever scope and lifetime it was
+ * granted originally, so a newly added scope (transition:chat.bsky) or a switch
+ * from public to confidential client never reaches existing accounts. Deleting
+ * the stored session forces the next authorize to go all the way to a real
+ * consent screen.
  *
  * Guarded by a prefix of OAUTH_SIGNING_SECRET so it is not a public reset
  * button.
@@ -24,6 +26,7 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const did = url.searchParams.get('did');
   const reset = url.searchParams.get('reset') === '1';
+  const resetAll = url.searchParams.get('resetAll') === '1';
   const key = url.searchParams.get('key');
 
   const secret = process.env.OAUTH_SIGNING_SECRET;
@@ -35,6 +38,29 @@ export async function GET(req: Request) {
       },
       { status: 401 }
     );
+  }
+
+  // Clear every stored session. Useful after changing scope or client mode,
+  // and it does not require knowing anyone's DID.
+  if (resetAll) {
+    const keys = await kvKeys(KEYS.sessionPattern);
+    const cleared: string[] = [];
+
+    for (const k of keys) {
+      await kvDel(k);
+      cleared.push(k.replace('bsky:session:', ''));
+    }
+
+    return Response.json({
+      resetAll: true,
+      clearedCount: cleared.length,
+      cleared,
+      clientMode: isConfidential() ? 'confidential' : 'public',
+      note:
+        cleared.length === 0
+          ? 'No stored sessions were found, so there was nothing to clear. Connecting an account will create a fresh one.'
+          : 'Sessions deleted. Reconnect each account to get a fresh consent screen and a session issued under the current client mode.'
+    });
   }
 
   // No DID: report how this deployment is registered. This is the quickest way
@@ -51,6 +77,13 @@ export async function GET(req: Request) {
 
     const meta = clientMetadata() as Record<string, unknown>;
 
+    let storedSessions: number | null = null;
+    try {
+      storedSessions = (await kvKeys(KEYS.sessionPattern)).length;
+    } catch {
+      // storage may be unreachable; the rest of the report is still useful
+    }
+
     return Response.json({
       clientMode: confidential ? 'confidential' : 'public',
       sessionLifetime: confidential ? 'up to 180 days per refresh token' : '14 days (atproto cap)',
@@ -58,8 +91,9 @@ export async function GET(req: Request) {
       jwksUri: meta.jwks_uri ?? null,
       signingKeys: keyCount,
       keyError,
+      storedSessions,
       requestedScope: process.env.BLUESKY_SCOPE ?? '(default)',
-      hint: 'Add ?did=did:plc:... to inspect one stored session.'
+      hint: 'Add ?did=did:plc:... to inspect one session, or &resetAll=1 to clear them all.'
     });
   }
 
