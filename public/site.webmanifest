@@ -1,20 +1,23 @@
 {
   "name": "Bluesky MCP Server",
   "short_name": "Bluesky MCP",
+  "description": "MCP server for Bluesky using AT Protocol OAuth.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#0a0a0a",
-  "theme_color": "#0a0a0a",
+  "background_color": "#121011",
+  "theme_color": "#121011",
   "icons": [
     {
-      "src": "/web-app-manifest-192x192.png",
+      "src": "/brand/icon-192.png",
       "sizes": "192x192",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "maskable"
     },
     {
-      "src": "/web-app-manifest-512x512.png",
+      "src": "/brand/icon-512.png",
       "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }
