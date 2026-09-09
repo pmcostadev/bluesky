@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 type State = 'idle' | 'starting' | 'waiting' | 'done' | 'error';
+
+const CHANNEL = 'bluesky-mcp-connect';
 
 /**
  * Start a Bluesky connection from our own domain.
@@ -11,23 +13,71 @@ type State = 'idle' | 'starting' | 'waiting' | 'done' | 'error';
  * dashboard.composio.dev, because the landing page comes from a callback_url
  * passed at connection-creation time and the dashboard passes its own. Creating
  * the connection here lets us point that at /connected instead.
+ *
+ * This page used to sit on 'waiting' forever, because it only listened for a
+ * postMessage from the popup. Composio's pages send COOP: same-origin, which
+ * severs the opener relationship, so that message can never arrive. Completion
+ * is now detected by polling the server, with BroadcastChannel as a fast path.
  */
 export default function Connect() {
   const [state, setState] = useState<State>('idle');
   const [error, setError] = useState<string | null>(null);
+  const connectionId = useRef<string | null>(null);
+  const stop = useRef(false);
 
-  // The popup tells us when it is finished.
   useEffect(() => {
-    function onMessage(e: MessageEvent) {
-      if (e.data?.source !== 'bluesky-mcp') return;
-      if (e.data?.type !== 'composio-connected') return;
-      setState(e.data.status === 'failed' ? 'error' : 'done');
-      if (e.data.status === 'failed') {
-        setError('Authorization was not completed.');
+    return () => {
+      stop.current = true;
+    };
+  }, []);
+
+  async function poll() {
+    const id = connectionId.current;
+    if (!id || stop.current) return;
+
+    const deadline = Date.now() + 10 * 60 * 1000;
+
+    while (!stop.current && Date.now() < deadline) {
+      try {
+        const res = await fetch(`/api/connect/status?connectionId=${encodeURIComponent(id)}`, {
+          cache: 'no-store'
+        });
+        const body = await res.json();
+        const status = String(body.status ?? 'UNKNOWN').toUpperCase();
+
+        if (status === 'ACTIVE') {
+          setState('done');
+          return;
+        }
+        if (['EXPIRED', 'FAILED', 'DELETED', 'INACTIVE'].includes(status)) {
+          setState('error');
+          setError(`The connection ended as ${status}. Nothing was saved, so you can try again.`);
+          return;
+        }
+      } catch {
+        // transient; keep polling
       }
+      await new Promise((r) => setTimeout(r, 2000));
     }
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
+
+    if (!stop.current) {
+      setState('error');
+      setError('The connection was not completed in time. Start it again.');
+    }
+  }
+
+  // Fast path: the callback page announces itself same-origin.
+  useEffect(() => {
+    let channel: BroadcastChannel | null = null;
+    try {
+      channel = new BroadcastChannel(CHANNEL);
+      channel.onmessage = (e) => {
+        if (e.data?.source === 'bluesky-mcp') void poll();
+      };
+    } catch {
+      // unsupported; polling covers it
+    }
+    return () => channel?.close();
   }, []);
 
   async function start() {
@@ -49,10 +99,12 @@ export default function Connect() {
         return;
       }
 
+      connectionId.current = data.connectionId ?? null;
+
       const popup = window.open(
         data.redirectUrl,
         'bluesky-connect',
-        'width=520,height=720,noopener=no'
+        'popup=yes,width=520,height=720'
       );
 
       if (!popup) {
@@ -62,6 +114,7 @@ export default function Connect() {
       }
 
       setState('waiting');
+      void poll();
     } catch (e) {
       setState('error');
       setError(e instanceof Error ? e.message : String(e));
