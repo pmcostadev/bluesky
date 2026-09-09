@@ -38,28 +38,15 @@ import type {
   UpdateEmailInput,
   AdminSendEmailInput,
   ConfirmEmailInput,
-  CreateAppPasswordInput,
-  CreateInviteCodeInput,
-  CreateInviteCodesInput,
   DeactivateAccountInput,
   DeleteAccountInput,
-  GetAccountInviteCodesInput,
   GetServiceAuthInput,
+  AgeAssuranceStateInput,
+  BeginAgeAssuranceInput,
   ProcessedImage,
   UploadBlobInput,
   ToolResult
 } from './types';
-
-/**
- * Reads route through the connected account's PDS, which proxies to the AppView.
- *
- * This used to fall back to an unauthenticated public-AppView client when no
- * credentials were present. That path is gone: /mcp rejects unauthenticated
- * requests outright, so a client always arrives with a session already bound.
- */
-function requireClient(client: BlueskyClient): BlueskyClient {
-  return client;
-}
 
 // ── Posts ────────────────────────────────────────────────────────────────────
 
@@ -96,7 +83,7 @@ export async function handleGetPosts(client: BlueskyClient, params: { uris: stri
       if (v.valid && v.uri) validUris.push(v.uri);
     }
     if (validUris.length === 0) return { success: false, error: 'No valid AT Protocol URIs provided (must start with at://)' };
-    const result = await requireClient(client).getPosts(validUris);
+    const result = await client.getPosts(validUris);
     return { success: true, data: result };
   } catch (error) {
     return { success: false, error: formatError(error) };
@@ -107,7 +94,7 @@ export async function handleGetLikes(client: BlueskyClient, params: { uri: strin
   try {
     const v = validateAtUri(params.uri);
     if (!v.valid || !v.uri) return { success: false, error: v.error };
-    const result = await requireClient(client).getLikes(v.uri, sanitizeCursor(params.cursor), sanitizeLimit(params.limit, 50));
+    const result = await client.getLikes(v.uri, sanitizeCursor(params.cursor), sanitizeLimit(params.limit, 50));
     return { success: true, data: result };
   } catch (error) {
     return { success: false, error: formatError(error) };
@@ -118,7 +105,7 @@ export async function handleGetRepostedBy(client: BlueskyClient, params: { uri: 
   try {
     const v = validateAtUri(params.uri);
     if (!v.valid || !v.uri) return { success: false, error: v.error };
-    const result = await requireClient(client).getRepostedBy(v.uri, sanitizeCursor(params.cursor), sanitizeLimit(params.limit, 50));
+    const result = await client.getRepostedBy(v.uri, sanitizeCursor(params.cursor), sanitizeLimit(params.limit, 50));
     return { success: true, data: result };
   } catch (error) {
     return { success: false, error: formatError(error) };
@@ -186,7 +173,7 @@ export async function handleGetTimeline(client: BlueskyClient, params: GetTimeli
 export async function handleGetFeed(client: BlueskyClient, params: GetFeedInput): Promise<ToolResult> {
   try {
     if (!params.feed?.startsWith('at://')) return { success: false, error: 'Invalid feed URI. Must start with at://' };
-    const result = await requireClient(client).getFeed({ feed: params.feed, cursor: sanitizeCursor(params.cursor), limit: sanitizeLimit(params.limit, DEFAULT_LIMIT) });
+    const result = await client.getFeed({ feed: params.feed, cursor: sanitizeCursor(params.cursor), limit: sanitizeLimit(params.limit, DEFAULT_LIMIT) });
     return { success: true, data: result };
   } catch (error) {
     return { success: false, error: formatError(error) };
@@ -196,7 +183,7 @@ export async function handleGetFeed(client: BlueskyClient, params: GetFeedInput)
 export async function handleGetAuthorFeed(client: BlueskyClient, params: GetAuthorFeedInput): Promise<ToolResult> {
   try {
     if (!params.actor) return { success: false, error: 'Actor parameter is required' };
-    const result = await requireClient(client).getAuthorFeed({ actor: sanitizeString(params.actor), filter: params.filter, cursor: sanitizeCursor(params.cursor), limit: sanitizeLimit(params.limit, DEFAULT_LIMIT) });
+    const result = await client.getAuthorFeed({ actor: sanitizeString(params.actor), filter: params.filter, cursor: sanitizeCursor(params.cursor), limit: sanitizeLimit(params.limit, DEFAULT_LIMIT) });
     return { success: true, data: result };
   } catch (error) {
     return { success: false, error: formatError(error) };
@@ -207,7 +194,7 @@ export async function handleGetThread(client: BlueskyClient, params: GetThreadIn
   try {
     const v = validateAtUri(params.uri);
     if (!v.valid || !v.uri) return { success: false, error: v.error };
-    const result = await requireClient(client).getPostThread({ uri: v.uri, depth: Math.min(Math.max(0, params.depth ?? 6), 1000), parentHeight: Math.min(Math.max(0, params.parentHeight ?? 80), 1000) });
+    const result = await client.getPostThread({ uri: v.uri, depth: Math.min(Math.max(0, params.depth ?? 6), 1000), parentHeight: Math.min(Math.max(0, params.parentHeight ?? 80), 1000) });
     return { success: true, data: result };
   } catch (error) {
     return { success: false, error: formatError(error) };
@@ -219,7 +206,7 @@ export async function handleGetThread(client: BlueskyClient, params: GetThreadIn
 export async function handleGetProfile(client: BlueskyClient, params: GetProfileInput): Promise<ToolResult> {
   try {
     if (!params.actor) return { success: false, error: 'Actor parameter is required' };
-    const result = await requireClient(client).getProfile(sanitizeString(params.actor));
+    const result = await client.getProfile(sanitizeString(params.actor));
     return { success: true, data: result };
   } catch (error) {
     return { success: false, error: formatError(error) };
@@ -233,7 +220,7 @@ export async function handleGetProfiles(client: BlueskyClient, params: { actors:
     if (params.actors.length > 25) return { success: false, error: 'Maximum 25 actors per request' };
     const sanitizedActors = params.actors.filter((a): a is string => typeof a === 'string').map(a => sanitizeString(a)).filter(a => a.length > 0);
     if (sanitizedActors.length === 0) return { success: false, error: 'No valid actors provided' };
-    const result = await requireClient(client).getProfiles(sanitizedActors);
+    const result = await client.getProfiles(sanitizedActors);
     return { success: true, data: result };
   } catch (error) {
     return { success: false, error: formatError(error) };
@@ -250,12 +237,12 @@ export async function handleGetSuggestions(client: BlueskyClient, params: { limi
   }
 }
 
-// ── Search ────────────────────────────────────────────────────────────────────
+// ── Search ───────────────────────────────────────────────────────────────────
 
 export async function handleSearchActors(client: BlueskyClient, params: SearchActorsInput): Promise<ToolResult> {
   try {
     if (!params.term) return { success: false, error: 'Search term is required' };
-    const result = await requireClient(client).searchActors({ term: sanitizeString(params.term), limit: sanitizeLimit(params.limit, 10) });
+    const result = await client.searchActors({ term: sanitizeString(params.term), limit: sanitizeLimit(params.limit, 10) });
     return { success: true, data: result };
   } catch (error) {
     return { success: false, error: formatError(error) };
@@ -265,7 +252,7 @@ export async function handleSearchActors(client: BlueskyClient, params: SearchAc
 export async function handleSearchActorsTypeahead(client: BlueskyClient, params: SearchActorsInput): Promise<ToolResult> {
   try {
     if (!params.term) return { success: false, error: 'Search term is required' };
-    const result = await requireClient(client).searchActorsTypeahead({ term: sanitizeString(params.term), limit: sanitizeLimit(params.limit, 10) });
+    const result = await client.searchActorsTypeahead({ term: sanitizeString(params.term), limit: sanitizeLimit(params.limit, 10) });
     return { success: true, data: result };
   } catch (error) {
     return { success: false, error: formatError(error) };
@@ -275,7 +262,7 @@ export async function handleSearchActorsTypeahead(client: BlueskyClient, params:
 export async function handleSearchPosts(client: BlueskyClient, params: SearchPostsInput): Promise<ToolResult> {
   try {
     if (!params.query) return { success: false, error: 'Search query is required' };
-    const result = await requireClient(client).searchPosts({ q: sanitizeString(params.query), cursor: sanitizeCursor(params.cursor), limit: sanitizeLimit(params.limit, DEFAULT_LIMIT), sort: params.sort, mentions: params.mentions, author: params.author, lang: params.lang });
+    const result = await client.searchPosts({ q: sanitizeString(params.query), cursor: sanitizeCursor(params.cursor), limit: sanitizeLimit(params.limit, DEFAULT_LIMIT), sort: params.sort, mentions: params.mentions, author: params.author, lang: params.lang });
     return { success: true, data: result };
   } catch (error) {
     return { success: false, error: formatError(error) };
@@ -334,10 +321,16 @@ export async function handleGetBookmarks(client: BlueskyClient, params: { cursor
 
 // ── Age Assurance ─────────────────────────────────────────────────────────────
 
-export async function handleBeginAgeAssurance(client: BlueskyClient): Promise<ToolResult> {
+export async function handleBeginAgeAssurance(client: BlueskyClient, params: BeginAgeAssuranceInput): Promise<ToolResult> {
   try {
     if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
-    const result = await client.beginAgeAssurance();
+    if (!params.email) return { success: false, error: 'email is required' };
+    if (!params.countryCode) return { success: false, error: 'countryCode is required (ISO 3166-1 alpha-2, e.g. "PT")' };
+    const result = await client.beginAgeAssurance(
+      sanitizeString(params.email),
+      sanitizeString(params.countryCode, 2),
+      params.language ? sanitizeString(params.language, 10) : 'en'
+    );
     return { success: true, data: result };
   } catch (error) {
     return { success: false, error: formatError(error) };
@@ -354,10 +347,11 @@ export async function handleGetAgeAssuranceConfig(client: BlueskyClient): Promis
   }
 }
 
-export async function handleGetAgeAssuranceState(client: BlueskyClient): Promise<ToolResult> {
+export async function handleGetAgeAssuranceState(client: BlueskyClient, params: AgeAssuranceStateInput): Promise<ToolResult> {
   try {
     if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
-    const result = await client.getAgeAssuranceState();
+    if (!params.countryCode) return { success: false, error: 'countryCode is required (ISO 3166-1 alpha-2, e.g. "PT")' };
+    const result = await client.getAgeAssuranceState(sanitizeString(params.countryCode, 2));
     return { success: true, data: result };
   } catch (error) {
     return { success: false, error: formatError(error) };
@@ -645,44 +639,6 @@ export async function handleConfirmEmail(client: BlueskyClient, params: ConfirmE
   }
 }
 
-export async function handleCreateAppPassword(client: BlueskyClient, params: CreateAppPasswordInput): Promise<ToolResult> {
-  try {
-    if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
-    if (!params.name) return { success: false, error: 'name is required' };
-    const result = await client.createAppPassword(sanitizeString(params.name));
-    return { success: true, data: result };
-  } catch (error) {
-    return { success: false, error: formatError(error) };
-  }
-}
-
-export async function handleCreateInviteCode(client: BlueskyClient, params: CreateInviteCodeInput): Promise<ToolResult> {
-  try {
-    if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
-    const result = await client.createInviteCode(
-      params.forAccount ? sanitizeString(params.forAccount) : undefined,
-      params.useCount
-    );
-    return { success: true, data: result };
-  } catch (error) {
-    return { success: false, error: formatError(error) };
-  }
-}
-
-export async function handleCreateInviteCodes(client: BlueskyClient, params: CreateInviteCodesInput): Promise<ToolResult> {
-  try {
-    if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
-    const result = await client.createInviteCodes(
-      params.codeCount,
-      params.useCount,
-      params.forAccounts?.filter((a): a is string => typeof a === 'string').map(a => sanitizeString(a))
-    );
-    return { success: true, data: result };
-  } catch (error) {
-    return { success: false, error: formatError(error) };
-  }
-}
-
 export async function handleDeactivateAccount(client: BlueskyClient, params: DeactivateAccountInput): Promise<ToolResult> {
   try {
     if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
@@ -707,16 +663,6 @@ export async function handleDeleteAccount(client: BlueskyClient, params: DeleteA
 export async function handleDescribeServer(client: BlueskyClient): Promise<ToolResult> {
   try {
     const result = await client.describeServer();
-    return { success: true, data: result };
-  } catch (error) {
-    return { success: false, error: formatError(error) };
-  }
-}
-
-export async function handleGetAccountInviteCodes(client: BlueskyClient, params: GetAccountInviteCodesInput): Promise<ToolResult> {
-  try {
-    if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
-    const result = await client.getAccountInviteCodes(params.includeUsed, params.createAvailable);
     return { success: true, data: result };
   } catch (error) {
     return { success: false, error: formatError(error) };
@@ -816,13 +762,9 @@ export const toolHandlers: Record<string, (...args: any[]) => Promise<ToolResult
   // Server / Account Management
   admin_send_email: handleAdminSendEmail,
   confirm_email: handleConfirmEmail,
-  create_app_password: handleCreateAppPassword,
-  create_invite_code: handleCreateInviteCode,
-  create_invite_codes: handleCreateInviteCodes,
   deactivate_account: handleDeactivateAccount,
   delete_account: handleDeleteAccount,
   describe_server: handleDescribeServer,
-  get_account_invite_codes: handleGetAccountInviteCodes,
   get_service_auth: handleGetServiceAuth,
   get_session: handleGetSession,
   list_app_passwords: handleListAppPasswords,
