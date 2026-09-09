@@ -5,14 +5,11 @@ export const runtime = 'nodejs';
  *
  * Composio's dashboard "Connect" button always returns the user to
  * dashboard.composio.dev, because the landing page is set by a `callback_url`
- * passed when the connection is *created*, and the dashboard passes its own.
+ * passed when the connection is created, and the dashboard passes its own.
  * The only way to control it is to create the connection ourselves.
  *
- *   POST /api/connect/link  { authConfigId?, userId? }
- *     -> { redirectUrl, connectionId, callbackUrl }
- *
- * The caller then sends the browser to redirectUrl. When the user finishes,
- * Composio returns them to /connected on this domain.
+ * POST /api/connect/link { authConfigId?, userId? }
+ *   -> { redirectUrl, connectionId, callbackUrl }
  */
 
 const COMPOSIO_API = 'https://backend.composio.dev/api/v3';
@@ -37,7 +34,7 @@ export async function POST(req: Request) {
   try {
     body = await req.json();
   } catch {
-    // an empty body is fine; fall back to env defaults
+    // An empty body is fine; fall back to env defaults.
   }
 
   let apiKey: string;
@@ -56,8 +53,6 @@ export async function POST(req: Request) {
   const callbackUrl = `${publicOrigin(req)}/connected`;
 
   try {
-    // `link` is the current endpoint for redirectable OAuth schemes, including
-    // DCR. `initiate` is being retired for Composio-managed OAuth.
     const res = await fetch(`${COMPOSIO_API}/connected_accounts/link`, {
       method: 'POST',
       headers: {
@@ -73,7 +68,6 @@ export async function POST(req: Request) {
     });
 
     const text = await res.text();
-
     if (!res.ok) {
       return Response.json(
         { error: 'composio_error', status: res.status, detail: text.slice(0, 500) },
@@ -84,9 +78,10 @@ export async function POST(req: Request) {
     const data = JSON.parse(text) as {
       redirect_url?: string;
       redirectUrl?: string;
+      connected_account_id?: string;
+      connectedAccountId?: string;
       id?: string;
     };
-
     const redirectUrl = data.redirect_url ?? data.redirectUrl;
     if (!redirectUrl) {
       return Response.json(
@@ -95,7 +90,11 @@ export async function POST(req: Request) {
       );
     }
 
-    return Response.json({ redirectUrl, connectionId: data.id ?? null, callbackUrl });
+    return Response.json({
+      redirectUrl,
+      connectionId: data.connected_account_id ?? data.connectedAccountId ?? data.id ?? null,
+      callbackUrl
+    });
   } catch (e) {
     return Response.json(
       { error: 'request_failed', message: e instanceof Error ? e.message : String(e) },
