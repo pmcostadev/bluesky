@@ -1,3 +1,4 @@
+import { BSKY_SCOPE } from '@/oauth/client';
 import { seal } from '@/oauth/seal';
 
 export const runtime = 'nodejs';
@@ -16,6 +17,12 @@ export async function OPTIONS() {
  * RFC 7591 Dynamic Client Registration, for MCP clients like Composio.
  * The client's metadata is encrypted into the client_id we return, so there is
  * no registry to store or clean up.
+ *
+ * The `scope` we echo must cover everything this server can grant. A client
+ * registered with a narrower scope than it later requests sees the difference as
+ * a partial grant, and will not treat the connection as cleanly completed. Like
+ * the authorization-server metadata, it is derived from BSKY_SCOPE rather than
+ * written out by hand.
  */
 export async function POST(req: Request) {
   let body: any;
@@ -81,7 +88,7 @@ export async function POST(req: Request) {
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
       token_endpoint_auth_method: 'none',
-      scope: 'atproto transition:generic'
+      scope: BSKY_SCOPE
     },
     { status: 201, headers: { ...CORS, 'Cache-Control': 'no-store' } }
   );
