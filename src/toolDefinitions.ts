@@ -1,10 +1,17 @@
 /**
  * MCP Tool Definitions - JSON Schema definitions for AI agent consumption
  *
- * 52 tools. Four were removed when this server moved to OAuth-only auth:
- * create_session and create_account require a password, and delete_session and
- * refresh_session fight the OAuth layer that owns token lifecycle (Bluesky
- * refresh tokens are single-use, so a manual refresh can orphan a session).
+ * 48 tools. Eight were removed when this server moved to OAuth-only auth:
+ *
+ *   Need a password, which OAuth replaces:
+ *     create_session, create_account
+ *   Fight the OAuth layer that owns token lifecycle (atproto refresh tokens are
+ *   single-use, so a manual refresh can orphan a session):
+ *     delete_session, refresh_session
+ *   Refused by Bluesky under OAuth with "OAuth credentials are not supported
+ *   for this endpoint" or "Authentication Required":
+ *     create_app_password, create_invite_code, create_invite_codes,
+ *     get_account_invite_codes
  */
 
 export interface ToolDefinition {
@@ -19,7 +26,7 @@ export interface ToolDefinition {
 
 export const toolDefinitions: ToolDefinition[] = [
 
-  // ── Posts ────────────────────────────────────────────────────────────────
+  // ── Posts ───────────────────────────────────────────────────────────────
 
   {
     name: 'create_post',
@@ -160,7 +167,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Feeds ────────────────────────────────────────────────────────────────
+  // ── Feeds ───────────────────────────────────────────────────────────────
 
   {
     name: 'get_timeline',
@@ -254,7 +261,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Search ─────────────────────────────────────────────────────────────────
+  // ── Search ────────────────────────────────────────────────────────────────
 
   {
     name: 'search_actors',
@@ -310,7 +317,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Account / Preferences ─────────────────────────────────────────────────
+  // ── Account / Preferences ──────────────────────────────────────────────────
 
   {
     name: 'get_preferences',
@@ -333,7 +340,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Server / Account Management ────────────────────────────────────────────
+  // ── Server / Account Management ─────────────────────────────────────────────
 
   {
     name: 'admin_send_email',
@@ -360,40 +367,6 @@ export const toolDefinitions: ToolDefinition[] = [
         token: { type: 'string', description: 'Verification token' }
       },
       required: ['email', 'token']
-    }
-  },
-  {
-    name: 'create_app_password',
-    description: 'Create a new app password for the connected account. Note this server itself authenticates with OAuth; app passwords are only useful for other tools. Requires authentication.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        name: { type: 'string', description: 'Human-readable name for the app password' }
-      },
-      required: ['name']
-    }
-  },
-  {
-    name: 'create_invite_code',
-    description: 'Create a single invite code. Requires authentication, and only works on PDSes that issue invites.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        forAccount: { type: 'string', description: 'DID of the account the code is for (optional)' },
-        useCount: { type: 'number', description: 'Number of times the code can be used', minimum: 1 }
-      }
-    }
-  },
-  {
-    name: 'create_invite_codes',
-    description: 'Create multiple invite codes at once. Requires authentication, and only works on PDSes that issue invites.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        codeCount: { type: 'number', description: 'Number of codes to create', minimum: 1 },
-        useCount: { type: 'number', description: 'Number of uses per code', minimum: 1 },
-        forAccounts: { type: 'array', items: { type: 'string' }, description: 'DIDs to create codes for' }
-      }
     }
   },
   {
@@ -426,23 +399,12 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
   {
-    name: 'get_account_invite_codes',
-    description: 'Get invite codes associated with the connected account. Requires authentication.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        includeUsed: { type: 'boolean', description: 'Include already-used codes' },
-        createAvailable: { type: 'boolean', description: 'Create new codes if available' }
-      }
-    }
-  },
-  {
     name: 'get_service_auth',
     description: 'Get a signed JWT for service-to-service authentication with another atproto service. Requires authentication.',
     inputSchema: {
       type: 'object',
       properties: {
-        aud: { type: 'string', description: 'DID of the audience service' },
+        aud: { type: 'string', description: 'DID of the audience service, e.g. did:web:api.bsky.app' },
         lxm: { type: 'string', description: 'Lexicon method this token is for (optional)' },
         exp: { type: 'number', description: 'Expiration time in seconds from now (optional)' }
       },
@@ -466,7 +428,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Chat ─────────────────────────────────────────────────────────────────
+  // ── Chat ──────────────────────────────────────────────────────────────────
 
   {
     name: 'add_reaction',
@@ -567,7 +529,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Bookmarks ─────────────────────────────────────────────────────────────
+  // ── Bookmarks ───────────────────────────────────────────────────────────────
 
   {
     name: 'create_bookmark',
@@ -604,7 +566,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Drafts ─────────────────────────────────────────────────────────────────
+  // ── Drafts ──────────────────────────────────────────────────────────────────
 
   {
     name: 'create_draft',
@@ -696,14 +658,19 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Age Assurance ───────────────────────────────────────────────────────────
+  // ── Age Assurance ────────────────────────────────────────────────────────────
 
   {
     name: 'begin_age_assurance',
-    description: 'Initiate the Age Assurance flow for the connected account. Requires authentication.',
+    description: 'Initiate the Age Assurance flow for the connected account. Bluesky emails a verification link to the address given. Requires authentication.',
     inputSchema: {
       type: 'object',
-      properties: {}
+      properties: {
+        email: { type: 'string', description: 'Email address to send the verification link to', format: 'email' },
+        countryCode: { type: 'string', description: 'ISO 3166-1 alpha-2 country code, e.g. "PT" or "US". Selects the verification provider and rules.', minLength: 2, maxLength: 2 },
+        language: { type: 'string', description: 'Language for the verification email, e.g. "en" or "pt". Defaults to "en".' }
+      },
+      required: ['email', 'countryCode']
     }
   },
   {
@@ -719,7 +686,10 @@ export const toolDefinitions: ToolDefinition[] = [
     description: 'Get the current Age Assurance state for the connected account (verified, pending, etc.). Requires authentication.',
     inputSchema: {
       type: 'object',
-      properties: {}
+      properties: {
+        countryCode: { type: 'string', description: 'ISO 3166-1 alpha-2 country code, e.g. "PT" or "US". Rules differ by country.', minLength: 2, maxLength: 2 }
+      },
+      required: ['countryCode']
     }
   },
 
@@ -744,7 +714,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Utility ────────────────────────────────────────────────────────────────
+  // ── Utility ─────────────────────────────────────────────────────────────────
 
   {
     name: 'test_connectivity',
