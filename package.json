@@ -1,6 +1,6 @@
 {
   "name": "bluesky-mcp",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -30,11 +30,11 @@
     "typescript": "^5.7.3"
   },
   "comments": {
-    "@atproto/jwk": "Pinned through overrides so exactly one copy exists. Two copies mean a JoseKey is not an instanceof the Key class the OAuth client checks against, the keyset silently ends up empty, and the confidential client refuses to build. @atproto/jwk-jose is intentionally NOT a direct dependency: JoseKey is imported from @atproto/oauth-client-node, which re-exports it from its own resolved copy."
+    "@atproto/jwk": "Pinned to 0.6.x through overrides for two reasons. (1) Exactly one copy must exist: two copies mean a JoseKey is not an instanceof the Key class the OAuth client checks against, the keyset silently ends up empty, and the confidential client refuses to build. (2) It must be >=0.6.0, because @atproto/jwk-jose 0.1.11+ imports isPrivateJwk from it, which does not exist in 0.4.x or 0.5.x. Pinning to ^0.4.0 built fine and then threw 'e.isPrivateJwk is not a function' at runtime on /jwks.json. @atproto/jwk-jose is intentionally NOT a direct dependency: JoseKey is imported from @atproto/oauth-client-node, which re-exports it from its own resolved copy."
   },
   "overrides": {
     "qs": ">=6.15.2",
     "postcss": ">=8.5.10",
-    "@atproto/jwk": "^0.4.0"
+    "@atproto/jwk": "^0.6.0"
   }
 }
