@@ -26,7 +26,9 @@ import { KEYS, kvDel, kvGet, kvSet, withLock } from './store';
  * not an instanceof the Key class that oauth-client-node checks against, so the
  * keyset silently ended up empty. The fix is to stop depending on
  * @atproto/jwk-jose directly and import JoseKey from oauth-client-node, which
- * re-exports it from its own single copy of the dependency tree.
+ * re-exports it from its own single copy of the dependency tree. See the
+ * @atproto/jwk note in package.json for the version constraint that goes with
+ * it.
  */
 
 const STATE_TTL_S = 15 * 60;
@@ -78,8 +80,30 @@ export function isConfidential(): boolean {
 }
 
 /**
- * Accepts a private key as a JWK object, a JWK JSON string, a PKCS#8 PEM, or
- * either of those base64-encoded (some dashboards mangle multi-line values).
+ * A private JWK may not carry "use": that member describes a PUBLIC key, and
+ * current @atproto/jwk rejects the combination (older versions only warned).
+ * Since "use":"sig" is what every key generator emits, translate it rather than
+ * making the operator hand-edit the value.
+ */
+function normalizeJwk(raw: string): string {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return raw;
+  }
+
+  const isPrivate = Boolean(parsed.d) || Boolean(parsed.k);
+  if (!isPrivate || parsed.use == null) return raw;
+
+  parsed.key_ops ??= parsed.use === 'enc' ? ['decrypt'] : ['sign'];
+  delete parsed.use;
+  return JSON.stringify(parsed);
+}
+
+/**
+ * Accepts a private key as a JWK JSON string, a PKCS#8 PEM, or either of those
+ * base64-encoded (some dashboards mangle multi-line values).
  */
 async function importKey(raw: string, index: number): Promise<JoseKey> {
   let value = raw;
@@ -102,7 +126,7 @@ async function importKey(raw: string, index: number): Promise<JoseKey> {
   }
 
   if (value.startsWith('{')) {
-    return JoseKey.fromJWK(value, kid);
+    return JoseKey.fromJWK(normalizeJwk(value), kid);
   }
 
   throw new Error(
@@ -202,9 +226,24 @@ export function getOAuthClient(): Promise<NodeOAuthClient> {
  * Public half of the signing keyset, served at /jwks.json and referenced by
  * jwks_uri in the client metadata. A public client advertises no keys, so this
  * returns an empty set in that mode rather than 404ing.
+ *
+ * Every PDS fetches this URL during authorization, so one malformed key must
+ * not take the whole document down: bad keys are skipped, not thrown.
  */
 export async function publicJwks() {
   if (!isConfidential()) return { keys: [] as unknown[] };
+
   const keys = await keyset();
-  return { keys: keys.map((k) => k.publicJwk).filter(Boolean) };
+  const out: unknown[] = [];
+
+  for (const key of keys) {
+    try {
+      const jwk = key.publicJwk;
+      if (jwk) out.push(jwk);
+    } catch {
+      // skip a key that cannot be reduced to its public half
+    }
+  }
+
+  return { keys: out };
 }
