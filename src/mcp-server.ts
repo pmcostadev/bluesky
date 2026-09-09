@@ -175,31 +175,38 @@ export function createMCPServer(auth: ResolvedAuth): Server {
   return server;
 }
 
+/**
+ * Guidance for the model, per task area.
+ *
+ * Only exposed tools may be named here. Advertising a tool that was removed
+ * (app-password management, invite codes, account deletion, admin email) makes
+ * the model attempt it and report a capability the server does not have.
+ */
 function getUsageGuidePrompt(task?: string): string {
   const t = (task || '').toLowerCase();
   if (t.includes('search'))
-    return `Use search_posts for keyword search, search_actors for users, search_actors_typeahead for autocomplete, search_accounts for admin account search.`;
+    return `Use search_posts for keyword search, search_actors for users, and search_actors_typeahead for autocomplete.`;
   if (t.includes('post'))
-    return `Use create_post with text (max 300 chars). Optionally set langs and reply. Use delete_post to remove a post by URI or rkey. Use upload_blob to upload images/files separately and get a blob reference for use in posts or other records.`;
+    return `Use create_post with text (max 300 chars). Optionally set langs and reply. Use delete_post to remove a post by URI or rkey. Use upload_blob to upload images or files separately and get a blob reference for use in posts.`;
   if (t.includes('blob') || t.includes('upload'))
-    return `Use upload_blob to upload a blob (image, video, or file) to your PDS. Provide the source as a base64 data URI, HTTPS URL, or local file path. Returns a blob reference with $type, ref, mimeType, and size that can be used in post embeds or other record types.`;
+    return `Use upload_blob to upload a blob (image, video, or file) to the PDS. Provide the source as a base64 data URI, HTTPS URL, or local file path. Returns a blob reference with $type, ref, mimeType, and size for use in post embeds.`;
   if (t.includes('profile'))
     return `Use get_profile for a single user, get_profiles for batch lookup (up to 25 actors).`;
   if (t.includes('feed'))
-    return `Use get_timeline (auth), get_feed (at:// URI), or get_author_feed.`;
+    return `Use get_timeline for the home feed, get_feed for a feed generator (at:// URI), or get_author_feed for one account.`;
   if (t.includes('thread'))
     return `Use get_thread with a post URI. Control depth and parentHeight.`;
   if (t.includes('draft'))
-    return `Use create_draft to save a draft, update_draft to modify an existing draft, get_drafts to list drafts, delete_draft to remove a draft by ID. You can attach up to 4 images (base64 data URI, HTTPS URL, or local file path) with alt text to drafts and posts.`;
+    return `Use create_draft to save a draft, update_draft to modify one, get_drafts to list them, delete_draft to remove one by ID. Up to 4 images with alt text can be attached.`;
+  if (t.includes('bookmark'))
+    return `Use create_bookmark to save a post, get_bookmarks to list them, delete_bookmark to remove one by URI.`;
   if (t.includes('chat') || t.includes('message'))
-    return `Use send_message to send a DM, send_message_batch for multiple DMs, get_messages to list conversation messages, add_reaction to react to a message, remove_reaction to remove a reaction, get_message_context for moderation context.`;
+    return `Use send_message to send a DM, send_message_batch for several, get_messages to list a conversation, add_reaction and remove_reaction for reactions, get_message_context for surrounding messages. Requires the transition:chat.bsky scope, which is granted at connection time.`;
   if (t.includes('account'))
-    return `Use get_preferences for account settings, update_email to change your email address, create_app_password to generate app passwords, list_app_passwords to view them, get_session to check session info, deactivate_account to deactivate, delete_account to permanently delete, confirm_email to verify an email change, get_account_invite_codes to list invite codes, create_invite_code or create_invite_codes to generate codes. Note: session refresh is handled automatically by the OAuth layer, so refresh_session and delete_session are not applicable.`;
+    return `Use get_preferences for account settings, get_session for session info, and update_email to change the email address. Session refresh is automatic through the OAuth layer. App-password management, invite codes, account creation, deactivation, and deletion are intentionally not available on this server.`;
   if (t.includes('server'))
-    return `Use describe_server to get PDS info. Account creation and password login are not available on this server: it authenticates with OAuth only.`;
-  if (t.includes('admin'))
-    return `Use admin_send_email to send emails as a PDS admin (requires admin privileges).`;
-  return `Tools: create_post, delete_post, get_timeline, get_feed, get_author_feed, get_thread, get_profile, get_profiles, search_posts, search_actors, search_actors_typeahead, search_accounts, get_posts, get_likes, get_reposted_by, like_post, unlike_post, repost_post, unrepost_post, get_suggestions, get_preferences, update_email, admin_send_email, confirm_email, create_app_password, create_invite_code, create_invite_codes, deactivate_account, delete_account, describe_server, get_account_invite_codes, get_service_auth, get_session, list_app_passwords, add_reaction, remove_reaction, get_messages, send_message, send_message_batch, get_message_context, create_draft, delete_draft, get_drafts, create_bookmark, delete_bookmark, get_bookmarks, begin_age_assurance, get_age_assurance_config, get_age_assurance_state, upload_blob, test_connectivity.`;
+    return `Use describe_server for PDS info. Account creation and password login are not available: this server authenticates with OAuth only.`;
+  return `Tools: create_post, delete_post, get_timeline, get_feed, get_author_feed, get_thread, get_profile, get_profiles, search_posts, search_actors, search_actors_typeahead, get_posts, get_likes, get_reposted_by, like_post, unlike_post, repost_post, unrepost_post, follow_user, unfollow_user, get_followers, get_follows, get_suggestions, get_preferences, update_email, confirm_email, describe_server, get_service_auth, get_session, get_notifications, add_reaction, remove_reaction, get_messages, send_message, send_message_batch, get_message_context, create_draft, update_draft, delete_draft, get_drafts, create_bookmark, delete_bookmark, get_bookmarks, get_age_assurance_config, get_age_assurance_state, upload_blob, test_connectivity.`;
 }
 
 function getSearchPostsPrompt(topic?: string): string {
@@ -211,5 +218,5 @@ function getSearchPostsPrompt(topic?: string): string {
 function getComposePostPrompt(content?: string): string {
   return `Compose a Bluesky post (max 300 chars):\n${
     content || '[content]'
-  }\nUse create_post with text and optionally langs: ["en"]. You can attach up to 4 images by providing an images array with source (base64 data URI, HTTPS URL, or local file path) and alt text. Alternatively, use upload_blob first to upload images individually and get blob references.`;
+  }\nUse create_post with text and optionally langs: ["en"]. Up to 4 images can be attached by providing an images array with source (base64 data URI, HTTPS URL, or local file path) and alt text, or use upload_blob first to get blob references.`;
 }
