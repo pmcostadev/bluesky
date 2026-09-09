@@ -62,28 +62,39 @@ export const metadata: Metadata = {
     canonical: '/'
   },
 
+  // Asset paths follow the canonical table in the pmcosta.dev design system, so
+  // every property that shares the brand resolves them the same way.
   openGraph: {
     type: 'website',
     url: '/',
     siteName: TITLE,
     title: `${TITLE} — ${TAGLINE}`,
     description: DESCRIPTION,
-    locale: 'en_US'
+    locale: 'en_US',
+    images: [
+      {
+        url: '/brand/og-default.png',
+        width: 1200,
+        height: 630,
+        alt: 'pmcosta.dev — Coimbra across the Mondego at dusk'
+      }
+    ]
   },
 
   twitter: {
     card: 'summary_large_image',
     title: `${TITLE} — ${TAGLINE}`,
     description: DESCRIPTION,
-    creator: '@pmcostadev'
+    creator: '@pmcostadev',
+    images: ['/brand/og-default.png']
   },
 
-  // favicon.svg is intentionally not referenced: the file in public/ is a
-  // 1.4 MB raster wrapped in SVG, which is far too heavy for a favicon.
   icons: {
     icon: [
       { url: '/favicon.ico', sizes: 'any' },
-      { url: '/favicon-96x96.png', type: 'image/png', sizes: '96x96' }
+      { url: '/brand/logo-96.png', type: 'image/png', sizes: '96x96' },
+      { url: '/brand/icon-192.png', type: 'image/png', sizes: '192x192' },
+      { url: '/brand/icon-512.png', type: 'image/png', sizes: '512x512' }
     ],
     apple: [{ url: '/apple-touch-icon.png', sizes: '180x180' }]
   },
