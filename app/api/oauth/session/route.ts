@@ -2,14 +2,15 @@ import { clientMetadata, getOAuthClient, isConfidential, publicJwks } from '@/oa
 import { KEYS, kvDel, kvGet, kvKeys } from '@/oauth/store';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 /**
- * Session diagnostics and reset.
+ * Session diagnostics and reset. Administrative: not part of the OAuth flow.
  *
- *   GET /api/oauth/session?key=...                  report the client mode
- *   GET /api/oauth/session?key=...&resetAll=1       delete every stored session
- *   GET /api/oauth/session?key=...&did=...          inspect the granted scope
- *   GET /api/oauth/session?key=...&did=...&reset=1  delete one session
+ *   GET /api/oauth/session?token=...                  report the client mode
+ *   GET /api/oauth/session?token=...&resetAll=1       delete every stored session
+ *   GET /api/oauth/session?token=...&did=...          inspect the granted scope
+ *   GET /api/oauth/session?token=...&did=...&reset=1  delete one session
  *
  * Why this exists: reconnecting in an MCP client does not necessarily re-run
  * the Bluesky authorization. If the client only refreshes its own token, the
@@ -19,25 +20,49 @@ export const runtime = 'nodejs';
  * the stored session forces the next authorize to go all the way to a real
  * consent screen.
  *
- * Guarded by a prefix of OAUTH_SIGNING_SECRET so it is not a public reset
- * button.
+ * ---
+ * Guarded by ADMIN_TOKEN, which is deliberately NOT derived from
+ * OAUTH_SIGNING_SECRET. An earlier version accepted the first 12 characters of
+ * the signing secret, which put a fragment of a signing key into a URL: browser
+ * history, proxy logs, and screenshots all keep those. Rotating this token is
+ * also then free, whereas rotating the signing secret invalidates every issued
+ * token.
+ *
+ * With ADMIN_TOKEN unset the endpoint is disabled rather than open.
  */
+
+/** Constant-time-ish comparison, so a wrong guess leaks no length information. */
+function tokenMatches(provided: string, expected: string): boolean {
+  if (provided.length !== expected.length) return false;
+  let diff = 0;
+  for (let i = 0; i < provided.length; i++) {
+    diff |= provided.charCodeAt(i) ^ expected.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const did = url.searchParams.get('did');
   const reset = url.searchParams.get('reset') === '1';
   const resetAll = url.searchParams.get('resetAll') === '1';
-  const key = url.searchParams.get('key');
+  const provided = url.searchParams.get('token') ?? '';
 
-  const secret = process.env.OAUTH_SIGNING_SECRET;
-  if (!secret || key !== secret.slice(0, 12)) {
+  const expected = process.env.ADMIN_TOKEN;
+
+  if (!expected) {
     return Response.json(
       {
-        error: 'unauthorized',
-        hint: 'Pass ?key=<first 12 characters of OAUTH_SIGNING_SECRET>'
+        error: 'disabled',
+        message:
+          'This diagnostic endpoint is disabled. Set ADMIN_TOKEN on the deployment to enable it.'
       },
-      { status: 401 }
+      { status: 404 }
     );
+  }
+
+  if (!provided || !tokenMatches(provided, expected)) {
+    return Response.json({ error: 'unauthorized' }, { status: 401 });
   }
 
   // Clear every stored session. Useful after changing scope or client mode,
@@ -58,7 +83,7 @@ export async function GET(req: Request) {
       clientMode: isConfidential() ? 'confidential' : 'public',
       note:
         cleared.length === 0
-          ? 'No stored sessions were found, so there was nothing to clear. Connecting an account will create a fresh one.'
+          ? 'No stored sessions were found, so there was nothing to clear.'
           : 'Sessions deleted. Reconnect each account to get a fresh consent screen and a session issued under the current client mode.'
     });
   }
@@ -93,7 +118,7 @@ export async function GET(req: Request) {
       keyError,
       storedSessions,
       requestedScope: process.env.BLUESKY_SCOPE ?? '(default)',
-      hint: 'Add ?did=did:plc:... to inspect one session, or &resetAll=1 to clear them all.'
+      hint: 'Add &did=did:plc:... to inspect one session, or &resetAll=1 to clear them all.'
     });
   }
 
