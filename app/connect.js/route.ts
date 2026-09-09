@@ -10,8 +10,7 @@ export const dynamic = 'force-dynamic';
  *   <button onclick="connectBluesky({ userId: 'user_123' })">Connect Bluesky</button>
  *
  * connectBluesky() creates the connection, opens the OAuth popup, polls until
- * Composio reports ACTIVE, and resolves. It never sends the user to a
- * standalone connect page.
+ * Composio reports ACTIVE, and resolves.
  *
  * ---
  * Served with no-store. This file is embedded by other sites, so a cached copy
@@ -24,22 +23,23 @@ export const dynamic = 'force-dynamic';
  * COOP: same-origin, which severs the opener relationship mid-flow. Two
  * consequences, both of which used to break this helper:
  *
- *   1. The popup's window.opener becomes null, so its postMessage never
- *      arrives. The callback page therefore closes itself and also announces
- *      over BroadcastChannel; postMessage is now only a bonus path.
+ *   1. The popup's window.opener becomes null, so a postMessage from it never
+ *      arrives.
  *   2. Our handle to the popup is disowned, and popup.closed starts reporting
  *      true while the window is still open. Treating that as "user closed the
  *      window" produced a false failure on a connection that was succeeding.
  *
- * The server-side status poll is the only authority here, and the ONLY thing
- * that resolves this promise as connected. Neither the popup closing nor an
- * announcement from the callback page is treated as proof: both can happen
- * while the account is still INITIALIZING, and reporting success then leaves the
- * user believing they connected when no usable account exists.
+ * The server-side status poll is therefore the only authority, and the only
+ * thing that resolves this promise as connected.
+ *
+ * Polling sends BOTH the connection id and the user id, because the id returned
+ * when the link is created is not always the id the connected account ends up
+ * with. Sending only the id meant every poll came back unresolved on an account
+ * that was already ACTIVE, and the caller's spinner ran forever.
  */
 
 /** Bump when the script body changes, so a stale copy is identifiable. */
-const HELPER_VERSION = '3';
+const HELPER_VERSION = '4';
 
 function origin(req: Request): string {
   const explicit = process.env.OAUTH_PUBLIC_ORIGIN;
@@ -74,7 +74,6 @@ const SCRIPT = `/* Bluesky MCP connect helper v%VERSION%. Served from %ORIGIN%/c
 
   var ORIGIN = '%ORIGIN%';
   var VERSION = '%VERSION%';
-  var CHANNEL = 'bluesky-mcp-connect';
   var TERMINAL_OK = ['ACTIVE'];
   var TERMINAL_BAD = ['EXPIRED', 'FAILED', 'DELETED', 'INACTIVE'];
 
@@ -120,11 +119,12 @@ const SCRIPT = `/* Bluesky MCP connect helper v%VERSION%. Served from %ORIGIN%/c
     });
   }
 
-  function checkStatus(connectionId) {
-    return fetch(
-      ORIGIN + '/api/connect/status?connectionId=' + encodeURIComponent(connectionId),
-      { cache: 'no-store' }
-    )
+  function checkStatus(connectionId, userId) {
+    var q = [];
+    if (connectionId) q.push('connectionId=' + encodeURIComponent(connectionId));
+    if (userId) q.push('userId=' + encodeURIComponent(userId));
+
+    return fetch(ORIGIN + '/api/connect/status?' + q.join('&'), { cache: 'no-store' })
       .then(function (res) {
         return res.json();
       })
@@ -159,7 +159,8 @@ const SCRIPT = `/* Bluesky MCP connect helper v%VERSION%. Served from %ORIGIN%/c
     var notify = typeof opts.onStatus === 'function' ? opts.onStatus : function () {};
 
     return startLink(opts).then(function (link) {
-      var connectionId = link.connectionId;
+      var connectionId = link.connectionId || null;
+      var userId = link.userId || opts.userId || null;
 
       if (opts.popup === false) {
         window.location.href = link.redirectUrl;
@@ -175,18 +176,16 @@ const SCRIPT = `/* Bluesky MCP connect helper v%VERSION%. Served from %ORIGIN%/c
 
       notify('INITIALIZING');
 
-      // Without an id there is nothing to verify against, and guessing is how
-      // an unfinished connection gets reported as done. Fail loudly instead.
-      if (!connectionId) {
+      // With neither identifier there is nothing to verify against, and guessing
+      // is how an unfinished connection gets reported as done.
+      if (!connectionId && !userId) {
         try {
           popup.close();
         } catch (e) {
           // disowned
         }
         return Promise.reject(
-          new Error(
-            'Composio did not return a connection id, so completion cannot be verified. Check COMPOSIO_AUTH_CONFIG_ID on the server.'
-          )
+          new Error('No connection id or user id to verify against, so completion cannot be confirmed.')
         );
       }
 
@@ -194,47 +193,17 @@ const SCRIPT = `/* Bluesky MCP connect helper v%VERSION%. Served from %ORIGIN%/c
         var settled = false;
         var deadline = Date.now() + timeoutMs;
         var timer = null;
-        var channel = null;
 
         function schedule(delay) {
           if (timer) window.clearTimeout(timer);
           timer = window.setTimeout(poll, delay);
         }
 
-        function announced(data) {
-          if (!data || data.source !== 'bluesky-mcp') return;
-          // The callback page reached our domain. That is a hint to check now,
-          // not evidence of success.
-          schedule(0);
-        }
-
-        function onMessage(event) {
-          if (event.origin !== ORIGIN) return;
-          announced(event.data);
-        }
-
-        try {
-          channel = new BroadcastChannel(CHANNEL);
-          channel.onmessage = function (event) {
-            announced(event.data);
-          };
-        } catch (e) {
-          // BroadcastChannel unsupported; polling covers it
-        }
-
         function cleanup() {
           settled = true;
           if (timer) window.clearTimeout(timer);
-          window.removeEventListener('message', onMessage);
-          if (channel) {
-            try {
-              channel.close();
-            } catch (e) {
-              // already closed
-            }
-          }
-          // The callback page closes itself. This is a best-effort tidy-up, and
-          // is expected to fail silently once COOP has disowned the handle.
+          // Composio's own page closes the popup. This is a best-effort tidy-up,
+          // expected to fail silently once COOP has disowned the handle.
           try {
             if (popup && !popup.closed) popup.close();
           } catch (e) {
@@ -263,7 +232,7 @@ const SCRIPT = `/* Bluesky MCP connect helper v%VERSION%. Served from %ORIGIN%/c
         function poll() {
           if (settled) return;
 
-          checkStatus(connectionId).then(function (status) {
+          checkStatus(connectionId, userId).then(function (status) {
             if (settled) return;
             notify(status);
 
@@ -282,8 +251,7 @@ const SCRIPT = `/* Bluesky MCP connect helper v%VERSION%. Served from %ORIGIN%/c
           });
         }
 
-        window.addEventListener('message', onMessage);
-        schedule(intervalMs);
+        schedule(1500);
       });
     });
   }
