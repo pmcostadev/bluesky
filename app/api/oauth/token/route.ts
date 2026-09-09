@@ -1,4 +1,6 @@
+import { BSKY_SCOPE } from '@/oauth/client';
 import { ACCESS_PREFIX, seal, unseal, verifyPkce } from '@/oauth/seal';
+import { KEYS, kvGet } from '@/oauth/store';
 
 export const runtime = 'nodejs';
 
@@ -35,11 +37,33 @@ async function readParams(req: Request): Promise<Record<string, string>> {
 }
 
 /**
+ * The scope actually granted by Bluesky for this account.
+ *
+ * This must be reported accurately. A client that asked for three scopes and
+ * receives a response advertising two treats the difference as a partial grant:
+ * it cannot know the third was really granted. Returning a hardcoded, narrower
+ * string here made every connection look downgraded even when chat access had
+ * been approved.
+ *
+ * Falls back to the requested scope when no session is stored yet.
+ */
+async function grantedScope(did: string): Promise<string> {
+  try {
+    const stored = await kvGet<{ tokenSet?: { scope?: string } }>(KEYS.session(did));
+    const scope = stored?.tokenSet?.scope;
+    if (scope && scope.trim()) return scope.trim();
+  } catch {
+    // storage hiccup: fall through to the requested scope
+  }
+  return BSKY_SCOPE;
+}
+
+/**
  * Issue our own token. It is only a pointer to the DID: the real Bluesky
  * session (tokens plus DPoP key) stays in Redis, because atproto rotates
  * refresh tokens on every use and they are single-use.
  */
-function issue(did: string) {
+async function issue(did: string) {
   const now = Date.now();
   return Response.json(
     {
@@ -47,7 +71,7 @@ function issue(did: string) {
       token_type: 'Bearer',
       expires_in: ACCESS_TTL_S,
       refresh_token: seal('access', { did }),
-      scope: 'atproto transition:generic',
+      scope: await grantedScope(did),
       sub: did
     },
     { headers: NO_STORE }
@@ -61,7 +85,7 @@ export async function POST(req: Request) {
     if (!p.refresh_token) return fail('invalid_request', 'refresh_token is required.');
     try {
       const r = unseal<{ did: string }>('access', p.refresh_token);
-      return issue(r.did);
+      return await issue(r.did);
     } catch {
       return fail('invalid_grant', 'That refresh token is not valid.');
     }
@@ -97,5 +121,5 @@ export async function POST(req: Request) {
     return fail('invalid_grant', 'code_verifier does not match the code_challenge.');
   }
 
-  return issue(c.did);
+  return await issue(c.did);
 }
