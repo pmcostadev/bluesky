@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A second push should cancel the first run rather than queue behind it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Typecheck and build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # npm ci respects the lockfile exactly, which is the point: it catches a
+      # dependency resolving differently than it did locally. This project has
+      # been bitten by exactly that (see the @atproto/jwk note in package.json).
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      # Build with placeholder env vars. None of them are real: the point is to
+      # prove the bundle compiles and every route can be built, not to reach any
+      # external service.
+      - name: Build
+        run: npm run build
+        env:
+          OAUTH_PUBLIC_ORIGIN: https://ci.example
+          OAUTH_SIGNING_SECRET: ci-placeholder-secret-not-used-anywhere-32
+          KV_REST_API_URL: https://ci.example
+          KV_REST_API_TOKEN: ci-placeholder
