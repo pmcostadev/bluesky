@@ -1,4 +1,5 @@
 import {
+  JoseKey,
   NodeOAuthClient,
   type NodeSavedSession,
   type NodeSavedState
@@ -13,24 +14,27 @@ import { KEYS, kvDel, kvGet, kvSet, withLock } from './store';
  * PAR, PKCE, and identity resolution from handle to PDS. We supply the storage.
  *
  * ---
- * Registered as a PUBLIC client (token_endpoint_auth_method: 'none'), which
- * means no signing keyset and no client assertions.
+ * CONFIDENTIAL client when signing keys are configured, PUBLIC client otherwise.
  *
- * Why not confidential: npm resolves two copies of @atproto/jwk, one nested
- * under jwk-jose and one under oauth-client-node. A JoseKey built from the
- * first is not an instanceof the Key class the second checks against, so the
- * keyset silently ends up empty and client construction fails with "requires at
- * least one ES256 signing key with a kid". The real fix is to dedupe that
- * transitive dependency; until then, a public client is fully functional.
+ * Why this matters: atproto caps public-client sessions and refresh tokens at
+ * 14 days, so every connected account has to re-authorise roughly every two
+ * weeks. A confidential client authenticates to the token endpoint with a
+ * signed assertion (private_key_jwt) and gets up to 180 days per refresh token.
  *
- * Tradeoff: atproto caps public-client sessions and refresh tokens at 14 days,
- * so a connected account needs re-authorising roughly every two weeks.
- * Confidential clients get up to 180 days per refresh token.
+ * The earlier blocker was a duplicate @atproto/jwk in node_modules: a JoseKey
+ * built from the copy nested under a directly-installed @atproto/jwk-jose was
+ * not an instanceof the Key class that oauth-client-node checks against, so the
+ * keyset silently ended up empty. The fix is to stop depending on
+ * @atproto/jwk-jose directly and import JoseKey from oauth-client-node, which
+ * re-exports it from its own single copy of the dependency tree.
  */
 
 const STATE_TTL_S = 15 * 60;
 
+type ClientMetadata = ConstructorParameters<typeof NodeOAuthClient>[0]['clientMetadata'];
+
 let cached: Promise<NodeOAuthClient> | null = null;
+let cachedKeyset: Promise<JoseKey[]> | null = null;
 
 export function publicOrigin(): string {
   const origin = process.env.OAUTH_PUBLIC_ORIGIN;
@@ -57,9 +61,75 @@ export function publicOrigin(): string {
 export const BSKY_SCOPE =
   process.env.BLUESKY_SCOPE ?? 'atproto transition:generic transition:chat.bsky';
 
-export function clientMetadata() {
+/** Raw private keys from the environment, in preference order. */
+function privateKeyEnv(): string[] {
+  return [
+    process.env.BLUESKY_PRIVATE_KEY_1,
+    process.env.BLUESKY_PRIVATE_KEY_2,
+    process.env.BLUESKY_PRIVATE_KEY_3
+  ]
+    .map((v) => v?.trim())
+    .filter((v): v is string => Boolean(v));
+}
+
+/** True when this deployment can authenticate itself to the token endpoint. */
+export function isConfidential(): boolean {
+  return privateKeyEnv().length > 0;
+}
+
+/**
+ * Accepts a private key as a JWK object, a JWK JSON string, a PKCS#8 PEM, or
+ * either of those base64-encoded (some dashboards mangle multi-line values).
+ */
+async function importKey(raw: string, index: number): Promise<JoseKey> {
+  let value = raw;
+
+  if (!value.startsWith('{') && !value.startsWith('-----')) {
+    try {
+      const decoded = Buffer.from(value, 'base64').toString('utf8').trim();
+      if (decoded.startsWith('{') || decoded.startsWith('-----')) value = decoded;
+    } catch {
+      // fall through to the error below
+    }
+  }
+
+  const kid = `bsky-${index + 1}`;
+
+  if (value.startsWith('-----')) {
+    // Passing the alg explicitly keeps the exported JWK usable for ES256; the
+    // library's own PEM path leaves alg empty, which some runtimes reject.
+    return JoseKey.fromPKCS8(value.replace(/\\n/g, '\n'), 'ES256', kid);
+  }
+
+  if (value.startsWith('{')) {
+    return JoseKey.fromJWK(value, kid);
+  }
+
+  throw new Error(
+    `BLUESKY_PRIVATE_KEY_${index + 1} is not a JWK or a PKCS#8 PEM. Expected a value starting with "{" or "-----BEGIN PRIVATE KEY-----".`
+  );
+}
+
+async function keyset(): Promise<JoseKey[]> {
+  cachedKeyset ??= (async () => {
+    const raws = privateKeyEnv();
+    const keys = await Promise.all(raws.map((raw, i) => importKey(raw, i)));
+
+    const usable = keys.filter((k) => k.algorithms.includes('ES256'));
+    if (raws.length > 0 && usable.length === 0) {
+      throw new Error(
+        'None of the configured BLUESKY_PRIVATE_KEY_* values is an ES256 signing key. atproto requires ES256 (EC P-256).'
+      );
+    }
+    return usable;
+  })();
+
+  return cachedKeyset;
+}
+
+export function clientMetadata(): ClientMetadata {
   const origin = publicOrigin();
-  return {
+  const base = {
     client_id: `${origin}/client-metadata.json`,
     client_name: 'Bluesky MCP',
     client_uri: origin,
@@ -71,15 +141,29 @@ export function clientMetadata() {
     response_types: ['code'] as ['code'],
     scope: BSKY_SCOPE,
     application_type: 'web' as const,
-    token_endpoint_auth_method: 'none' as const,
     dpop_bound_access_tokens: true as const
+  };
+
+  if (!isConfidential()) {
+    // Public client: no keyset, no assertions, 14-day sessions.
+    return { ...base, token_endpoint_auth_method: 'none' as const };
+  }
+
+  return {
+    ...base,
+    jwks_uri: `${origin}/jwks.json`,
+    token_endpoint_auth_method: 'private_key_jwt' as const,
+    token_endpoint_auth_signing_alg: 'ES256'
   };
 }
 
 export function getOAuthClient(): Promise<NodeOAuthClient> {
   cached ??= (async () => {
+    const keys = isConfidential() ? await keyset() : undefined;
+
     return new NodeOAuthClient({
       clientMetadata: clientMetadata(),
+      ...(keys && keys.length ? { keyset: keys } : {}),
 
       stateStore: {
         async set(k: string, state: NodeSavedState) {
@@ -115,10 +199,12 @@ export function getOAuthClient(): Promise<NodeOAuthClient> {
 }
 
 /**
- * Public clients advertise no JWKS. The route is kept so the path does not 404
- * for anything that probes it, and so restoring confidential mode later is a
- * one-file change rather than a re-plumb.
+ * Public half of the signing keyset, served at /jwks.json and referenced by
+ * jwks_uri in the client metadata. A public client advertises no keys, so this
+ * returns an empty set in that mode rather than 404ing.
  */
 export async function publicJwks() {
-  return { keys: [] as unknown[] };
+  if (!isConfidential()) return { keys: [] as unknown[] };
+  const keys = await keyset();
+  return { keys: keys.map((k) => k.publicJwk).filter(Boolean) };
 }
