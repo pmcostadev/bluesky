@@ -1,6 +1,7 @@
 import { corsHeaders, preflight } from '@/cors';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 /**
  * A drop-in browser helper, so a host product needs no Composio code at all:
@@ -11,6 +12,12 @@ export const runtime = 'nodejs';
  * connectBluesky() creates the connection, opens the OAuth popup, polls until
  * Composio reports ACTIVE, and resolves. It never sends the user to a
  * standalone connect page.
+ *
+ * ---
+ * Served with no-store. This file is embedded by other sites, so a cached copy
+ * means a deploy silently does nothing for everyone holding the old one: you
+ * change the code, redeploy, retest, and watch the previous version's behaviour.
+ * It is a few hundred bytes; correctness beats the cache hit.
  *
  * ---
  * Cross-Origin-Opener-Policy shapes this whole file. Composio's pages send
@@ -31,6 +38,9 @@ export const runtime = 'nodejs';
  * user believing they connected when no usable account exists.
  */
 
+/** Bump when the script body changes, so a stale copy is identifiable. */
+const HELPER_VERSION = '3';
+
 function origin(req: Request): string {
   const explicit = process.env.OAUTH_PUBLIC_ORIGIN;
   if (explicit) return explicit.replace(/\/$/, '');
@@ -44,22 +54,26 @@ export async function OPTIONS(req: Request) {
 }
 
 export async function GET(req: Request) {
-  const script = SCRIPT.replace(/%ORIGIN%/g, origin(req));
+  const script = SCRIPT.replace(/%ORIGIN%/g, origin(req)).replace(/%VERSION%/g, HELPER_VERSION);
 
   return new Response(script, {
     headers: {
       ...corsHeaders(req),
       'Content-Type': 'application/javascript; charset=utf-8',
-      'Cache-Control': 'public, max-age=300'
+      'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+      'CDN-Cache-Control': 'no-store',
+      'Vercel-CDN-Cache-Control': 'no-store',
+      Pragma: 'no-cache'
     }
   });
 }
 
-const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js */
+const SCRIPT = `/* Bluesky MCP connect helper v%VERSION%. Served from %ORIGIN%/connect.js */
 (function () {
   'use strict';
 
   var ORIGIN = '%ORIGIN%';
+  var VERSION = '%VERSION%';
   var CHANNEL = 'bluesky-mcp-connect';
   var TERMINAL_OK = ['ACTIVE'];
   var TERMINAL_BAD = ['EXPIRED', 'FAILED', 'DELETED', 'INACTIVE'];
@@ -231,7 +245,7 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
         function succeed(status) {
           if (settled) return;
           cleanup();
-          var result = { connectionId: connectionId, status: status };
+          var result = { connectionId: connectionId, status: status, helperVersion: VERSION };
           try {
             window.dispatchEvent(new CustomEvent('bluesky:connected', { detail: result }));
           } catch (e) {
@@ -274,6 +288,7 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
     });
   }
 
+  connectBluesky.version = VERSION;
   window.connectBluesky = connectBluesky;
 })();
 `;
