@@ -24,8 +24,11 @@ export const runtime = 'nodejs';
  *      true while the window is still open. Treating that as "user closed the
  *      window" produced a false failure on a connection that was succeeding.
  *
- * So the server-side status poll is the only authority here. popup.closed is
- * ignored entirely.
+ * The server-side status poll is the only authority here, and the ONLY thing
+ * that resolves this promise as connected. Neither the popup closing nor an
+ * announcement from the callback page is treated as proof: both can happen
+ * while the account is still INITIALIZING, and reporting success then leaves the
+ * user believing they connected when no usable account exists.
  */
 
 function origin(req: Request): string {
@@ -133,6 +136,8 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
   //     .then(function (result) { /* result.connectionId, result.status */ })
   //     .catch(function (err) {});
   //
+  // Resolves ONLY when Composio reports the account ACTIVE.
+  //
   function connectBluesky(options) {
     var opts = options || {};
     var timeoutMs = opts.timeoutMs || 10 * 60 * 1000;
@@ -156,6 +161,21 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
 
       notify('INITIALIZING');
 
+      // Without an id there is nothing to verify against, and guessing is how
+      // an unfinished connection gets reported as done. Fail loudly instead.
+      if (!connectionId) {
+        try {
+          popup.close();
+        } catch (e) {
+          // disowned
+        }
+        return Promise.reject(
+          new Error(
+            'Composio did not return a connection id, so completion cannot be verified. Check COMPOSIO_AUTH_CONFIG_ID on the server.'
+          )
+        );
+      }
+
       return new Promise(function (resolve, reject) {
         var settled = false;
         var deadline = Date.now() + timeoutMs;
@@ -169,8 +189,8 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
 
         function announced(data) {
           if (!data || data.source !== 'bluesky-mcp') return;
-          // The callback page reached our domain. Confirm with the server
-          // rather than trusting the message.
+          // The callback page reached our domain. That is a hint to check now,
+          // not evidence of success.
           schedule(0);
         }
 
@@ -199,9 +219,8 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
               // already closed
             }
           }
-          // The callback page closes itself. This is a best-effort tidy-up for
-          // the case where it could not, and is expected to fail silently once
-          // COOP has disowned the handle.
+          // The callback page closes itself. This is a best-effort tidy-up, and
+          // is expected to fail silently once COOP has disowned the handle.
           try {
             if (popup && !popup.closed) popup.close();
           } catch (e) {
@@ -229,11 +248,6 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
 
         function poll() {
           if (settled) return;
-
-          if (!connectionId) {
-            // Nothing authoritative to poll against.
-            return succeed('UNKNOWN');
-          }
 
           checkStatus(connectionId).then(function (status) {
             if (settled) return;
