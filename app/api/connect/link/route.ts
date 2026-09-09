@@ -1,12 +1,17 @@
 import { corsHeaders, originBlocked, preflight } from '@/cors';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 /**
  * Start a Composio connection.
  *
  *   POST /api/connect/link  { authConfigId?, userId?, callbackUrl? }
- *     -> { redirectUrl, connectionId }
+ *     -> { redirectUrl, connectionId, userId }
+ *
+ * `userId` comes back so the caller can poll /api/connect/status by user. That
+ * matters because the id in this response is not always the id the connected
+ * account ends up with, and polling the wrong one never resolves.
  *
  * ---
  * This endpoint deliberately does NOT send a callback_url by default.
@@ -116,6 +121,7 @@ export async function POST(req: Request) {
       {
         redirectUrl,
         connectionId: data.connected_account_id ?? data.connectedAccountId ?? data.id ?? null,
+        userId,
         callbackUrl
       },
       { headers: cors }
