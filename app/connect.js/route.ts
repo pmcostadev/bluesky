@@ -9,8 +9,23 @@ export const runtime = 'nodejs';
  *   <button onclick="connectBluesky({ userId: 'user_123' })">Connect Bluesky</button>
  *
  * connectBluesky() creates the connection, opens the OAuth popup, polls until
- * Composio reports ACTIVE, closes the popup, and resolves. It never sends the
- * user to a standalone connect page.
+ * Composio reports ACTIVE, and resolves. It never sends the user to a
+ * standalone connect page.
+ *
+ * ---
+ * Cross-Origin-Opener-Policy shapes this whole file. Composio's pages send
+ * COOP: same-origin, which severs the opener relationship mid-flow. Two
+ * consequences, both of which used to break this helper:
+ *
+ *   1. The popup's window.opener becomes null, so its postMessage never
+ *      arrives. The callback page therefore closes itself and also announces
+ *      over BroadcastChannel; postMessage is now only a bonus path.
+ *   2. Our handle to the popup is disowned, and popup.closed starts reporting
+ *      true while the window is still open. Treating that as "user closed the
+ *      window" produced a false failure on a connection that was succeeding.
+ *
+ * So the server-side status poll is the only authority here. popup.closed is
+ * ignored entirely.
  */
 
 function origin(req: Request): string {
@@ -42,6 +57,7 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
   'use strict';
 
   var ORIGIN = '%ORIGIN%';
+  var CHANNEL = 'bluesky-mcp-connect';
   var TERMINAL_OK = ['ACTIVE'];
   var TERMINAL_BAD = ['EXPIRED', 'FAILED', 'DELETED', 'INACTIVE'];
 
@@ -57,8 +73,7 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
     return window.open(
       url,
       'bluesky-connect',
-      'popup=yes,width=' + w + ',height=' + h + ',left=' + left + ',top=' + top +
-        ',toolbar=no,menubar=no,location=no,status=no'
+      'popup=yes,width=' + w + ',height=' + h + ',left=' + left + ',top=' + top
     );
   }
 
@@ -144,17 +159,44 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
       return new Promise(function (resolve, reject) {
         var settled = false;
         var deadline = Date.now() + timeoutMs;
-        var closedAt = null;
         var timer = null;
+        var channel = null;
+
+        try {
+          channel = new BroadcastChannel(CHANNEL);
+          channel.onmessage = function (event) {
+            var d = event.data || {};
+            if (d.source === 'bluesky-mcp') poll(true);
+          };
+        } catch (e) {
+          // BroadcastChannel unsupported; polling covers it
+        }
+
+        function onMessage(event) {
+          if (event.origin !== ORIGIN) return;
+          var d = event.data || {};
+          if (d.source !== 'bluesky-mcp') return;
+          poll(true);
+        }
 
         function cleanup() {
           settled = true;
           if (timer) window.clearTimeout(timer);
           window.removeEventListener('message', onMessage);
+          if (channel) {
+            try {
+              channel.close();
+            } catch (e) {
+              // already closed
+            }
+          }
+          // The callback page closes itself. This is a best-effort tidy-up for
+          // the case where it could not, and is expected to fail silently once
+          // COOP has disowned the handle.
           try {
             if (popup && !popup.closed) popup.close();
           } catch (e) {
-            // cross-origin popup; it closes itself
+            // disowned popup
           }
         }
 
@@ -176,27 +218,13 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
           reject(new Error(message));
         }
 
-        function onMessage(event) {
-          if (event.origin !== ORIGIN) return;
-          var data = event.data || {};
-          if (data.source !== 'bluesky-mcp') return;
-          // A fast path only: the callback page says it is done, but Composio is
-          // the source of truth, so still confirm with a status check.
-          if (!connectionId) {
-            succeed(data.status === 'failed' ? 'UNKNOWN' : 'ACTIVE');
-            return;
-          }
-          poll(true);
-        }
-
         function poll(immediate) {
           if (settled) return;
+          if (timer) window.clearTimeout(timer);
 
           if (!connectionId) {
-            // Nothing to poll; rely on the popup closing itself.
-            if (popup.closed) return succeed('UNKNOWN');
-            timer = window.setTimeout(poll, intervalMs);
-            return;
+            // Nothing authoritative to poll. Resolve on the announcement alone.
+            return succeed('UNKNOWN');
           }
 
           checkStatus(connectionId).then(function (status) {
@@ -208,15 +236,8 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
               return fail('The connection ended as ' + status + '. Nothing was saved; try again.');
             }
 
-            if (popup.closed) {
-              // Give the callback a grace period: the window can close a beat
-              // before Composio flips the record to ACTIVE.
-              if (closedAt === null) closedAt = Date.now();
-              if (Date.now() - closedAt > 15000) {
-                return fail('The authorization window was closed before the connection completed.');
-              }
-            }
-
+            // popup.closed is deliberately not consulted: after COOP severance
+            // it reports true on a window that is still open and mid-consent.
             if (Date.now() > deadline) {
               return fail('The connection was not completed in time. Start it again.');
             }
@@ -226,7 +247,14 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
         }
 
         window.addEventListener('message', onMessage);
-        timer = window.setTimeout(poll, immediate ? 0 : intervalMs);
+        timer = window.setTimeout(poll, immediateDelay(immediateFlag()));
+
+        function immediateFlag() {
+          return false;
+        }
+        function immediateDelay(flag) {
+          return flag ? 0 : intervalMs;
+        }
       });
     });
   }
