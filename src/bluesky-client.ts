@@ -12,10 +12,14 @@
  * `agent.api.xrpc.*` must not be used: it exists on the legacy password agent
  * but not on the OAuth one, and calling it throws "xrpc.get is not a function".
  *
- * Some PDS endpoints are password-only by design and answer "OAuth credentials
- * are not supported for this endpoint": createAppPassword, createInviteCode(s)
- * and getAccountInviteCodes. They are intentionally absent here rather than
- * present and permanently failing.
+ * Deliberately absent:
+ *   - Account destruction (deactivate, delete). One-off, irreversible actions
+ *     that belong in Bluesky's own settings, not in an agent's tool list.
+ *   - Password and invite-code endpoints (createAppPassword, listAppPasswords,
+ *     invite codes). bsky.social answers "OAuth credentials are not supported
+ *     for this endpoint".
+ *   - Admin lexicons (searchAccounts, sendEmail). bsky.social answers "Method
+ *     Not Implemented"; they only exist on a self-hosted PDS.
  */
 
 import { Agent, AppBskyFeedPost } from '@atproto/api';
@@ -34,7 +38,6 @@ import type {
   CreatePostResult,
   SearchPostsOptions,
   SearchPostsResult,
-  SearchAccountsInput,
   ProcessedImage
 } from './types';
 import { formatError } from './utils';
@@ -543,29 +546,6 @@ export class BlueskyClient {
   }
 
   /**
-   * Initiate Age Assurance flow for the account.
-   *
-   * The lexicon requires an email to send the verification link to and an
-   * ISO 3166-1 alpha-2 country code, which selects the provider and rules.
-   */
-  async beginAgeAssurance(
-    email: string,
-    countryCode: string,
-    language = 'en'
-  ): Promise<unknown> {
-    this.requireAuth();
-    try {
-      return await this.appviewRequest<unknown>('app.bsky.ageassurance.begin', undefined, {
-        email,
-        countryCode,
-        language
-      });
-    } catch (error) {
-      throw new Error(`Failed to begin age assurance: ${formatError(error)}`);
-    }
-  }
-
-  /**
    * Get Age Assurance configuration for the account
    */
   async getAgeAssuranceConfig(): Promise<unknown> {
@@ -814,25 +794,6 @@ export class BlueskyClient {
   }
 
   /**
-   * Search accounts via the admin endpoint (requires admin privileges)
-   */
-  async searchAccounts(
-    options: SearchAccountsInput
-  ): Promise<{ accounts: unknown[]; cursor?: string }> {
-    this.requireAuth();
-    try {
-      const data = await this.rpcGet('com.atproto.admin.searchAccounts', {
-        email: options.email,
-        cursor: options.cursor,
-        limit: options.limit
-      });
-      return { accounts: data.accounts ?? [], cursor: data.cursor };
-    } catch (error) {
-      throw new Error(`Failed to search accounts: ${formatError(error)}`);
-    }
-  }
-
-  /**
    * Update the email address on the account
    */
   async updateEmail(email: string, token?: string): Promise<void> {
@@ -848,30 +809,6 @@ export class BlueskyClient {
   }
 
   /**
-   * Send an email as an admin (requires admin privileges)
-   */
-  async adminSendEmail(
-    recipientDid: string,
-    content: string,
-    subject?: string,
-    senderDid?: string,
-    comment?: string
-  ): Promise<unknown> {
-    this.requireAuth();
-    try {
-      return await this.rpcPost('com.atproto.server.sendEmail', {
-        recipientDid,
-        content,
-        ...(subject ? { subject } : {}),
-        ...(senderDid ? { senderDid } : {}),
-        ...(comment ? { comment } : {})
-      });
-    } catch (error) {
-      throw new Error(`Failed to send admin email: ${formatError(error)}`);
-    }
-  }
-
-  /**
    * Confirm an email address using a token
    */
   async confirmEmail(email: string, token: string): Promise<void> {
@@ -880,32 +817,6 @@ export class BlueskyClient {
       await this.rpcPost('com.atproto.server.confirmEmail', { email, token });
     } catch (error) {
       throw new Error(`Failed to confirm email: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * Deactivate the account
-   */
-  async deactivateAccount(deleteAfter?: string): Promise<void> {
-    this.requireAuth();
-    try {
-      await this.rpcPost('com.atproto.server.deactivateAccount', {
-        ...(deleteAfter ? { deleteAfter } : {})
-      });
-    } catch (error) {
-      throw new Error(`Failed to deactivate account: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * Permanently delete the account
-   */
-  async deleteAccount(password: string): Promise<void> {
-    this.requireAuth();
-    try {
-      await this.rpcPost('com.atproto.server.deleteAccount', { password });
-    } catch (error) {
-      throw new Error(`Failed to delete account: ${formatError(error)}`);
     }
   }
 
@@ -941,18 +852,6 @@ export class BlueskyClient {
       return await this.rpcGet('com.atproto.server.getSession');
     } catch (error) {
       throw new Error(`Failed to get session: ${formatError(error)}`);
-    }
-  }
-
-  /**
-   * List app passwords
-   */
-  async listAppPasswords(): Promise<unknown> {
-    this.requireAuth();
-    try {
-      return await this.rpcGet('com.atproto.server.listAppPasswords');
-    } catch (error) {
-      throw new Error(`Failed to list app passwords: ${formatError(error)}`);
     }
   }
 
