@@ -7,12 +7,23 @@ export const maxDuration = 30;
 /**
  * Start a login.
  *
- * Unlike a centralised provider, atproto has no single login page: every account
- * lives on its own PDS, so we must know *who* is logging in before we can find
- * the right authorization server. When no handle is supplied we render a small
- * form to collect one, then hand off to the atproto client, which performs
- * identity resolution and the PAR request.
+ * atproto has no single login page: every account lives on its own PDS, which is
+ * why most atproto apps ask for a handle first. But the OAuth client also
+ * accepts a HOST as its input, in which case that host's own login screen
+ * identifies the user, exactly like a centralised provider.
+ *
+ * So the default path asks for nothing: we send the user straight to
+ * bsky.social, where the vast majority of accounts live, and they sign in there.
+ * The handle form only appears for people who need it:
+ *
+ *   /api/oauth/authorize?...                 -> straight to bsky.social
+ *   /api/oauth/authorize?...&chooser=1       -> show the handle form
+ *   /api/oauth/authorize?...&handle=x.com    -> use that handle or PDS directly
+ *
+ * BLUESKY_DEFAULT_PDS overrides the default host.
  */
+
+const DEFAULT_PDS = process.env.BLUESKY_DEFAULT_PDS ?? 'https://bsky.social';
 
 function escapeHtml(s: string): string {
   return s
@@ -63,6 +74,7 @@ export async function GET(req: Request) {
   const method = q.get('code_challenge_method') ?? '';
   const state = q.get('state') ?? '';
   const handle = (q.get('handle') ?? '').trim();
+  const chooser = q.get('chooser') === '1';
 
   if (!clientId.startsWith('bskc_')) {
     return page(
@@ -99,65 +111,77 @@ export async function GET(req: Request) {
   if (!codeChallenge) return back('invalid_request', 'code_challenge is required.');
   if (method !== 'S256') return back('invalid_request', 'code_challenge_method must be S256.');
 
-  const hiddenFields = () => {
-    const carry = new URLSearchParams({
+  const carry = () => {
+    const p = new URLSearchParams({
       client_id: clientId,
       redirect_uri: redirectUri,
       response_type: 'code',
       code_challenge: codeChallenge,
       code_challenge_method: 'S256'
     });
-    if (state) carry.set('state', state);
-    return [...carry.entries()]
-      .map(([k, v]) => `<input type="hidden" name="${k}" value="${escapeHtml(v)}">`)
-      .join('');
+    if (state) p.set('state', state);
+    return p;
   };
 
-  // Ask for the handle if we don't have one yet.
-  if (!handle) {
-    return page(`
-      <h1>Connect your Bluesky account</h1>
-      <p>${escapeHtml(client.n)} wants to act on your behalf. Enter your handle and you'll be sent to your own server to approve it.</p>
+  const hiddenFields = () =>
+    [...carry().entries()]
+      .map(([k, v]) => `<input type="hidden" name="${k}" value="${escapeHtml(v)}">`)
+      .join('');
+
+  const handleForm = (label: string, value = '') => `
       <form method="GET" action="/api/oauth/authorize">
         ${hiddenFields()}
-        <label for="handle">Handle or DID</label>
-        <input id="handle" name="handle" placeholder="yourname.bsky.social" autocapitalize="none"
+        <label for="handle">Handle, DID, or server</label>
+        <input id="handle" name="handle" value="${escapeHtml(value)}"
+               placeholder="yourname.bsky.social" autocapitalize="none"
                autocorrect="off" spellcheck="false" autofocus required>
-        <button type="submit">Continue</button>
-      </form>
-      <p class="note">Your password is never entered here. You sign in on Bluesky itself, and this app only receives a revocable token.</p>
+        <button type="submit">${label}</button>
+      </form>`;
+
+  // Only shown when explicitly requested, for self-hosted PDS users.
+  if (chooser && !handle) {
+    const straight = new URL('/api/oauth/authorize', req.url);
+    for (const [k, v] of carry()) straight.searchParams.set(k, v);
+
+    return page(`
+      <h1>Where is your account?</h1>
+      <p>${escapeHtml(client.n)} wants to act on your behalf. If your account is not on
+      bsky.social, enter your handle or your server's address.</p>
+      ${handleForm('Continue')}
+      <p class="note"><a href="${escapeHtml(straight.pathname + straight.search)}"
+        style="color:#1185fe">On bsky.social? Sign in there instead.</a></p>
     `);
   }
 
-  // Hand off to the atproto client: identity resolution, PAR, DPoP, PKCE.
+  // Our own flow state rides along in atproto's `state`, so the callback can
+  // reconstruct where to send the MCP client without extra storage.
+  const carried = seal('state', {
+    cru: redirectUri,
+    cs: state,
+    cc: codeChallenge,
+    cid: clientId,
+    exp: Date.now() + 15 * 60 * 1000
+  });
+
+  // No handle: send them straight to the default host and let its own login
+  // screen work out who they are. This is the zero-input path.
+  const target = handle || DEFAULT_PDS;
+
   try {
     const oauth = await getOAuthClient();
-
-    // Our own flow state rides along in atproto's `state`, so the callback can
-    // reconstruct where to send the MCP client without extra storage.
-    const carried = seal('state', {
-      cru: redirectUri,
-      cs: state,
-      cc: codeChallenge,
-      cid: clientId,
-      exp: Date.now() + 15 * 60 * 1000
-    });
-
-    const url = await oauth.authorize(handle, { state: carried, scope: BSKY_SCOPE });
+    const url = await oauth.authorize(target, { state: carried, scope: BSKY_SCOPE });
     return Response.redirect(url.toString(), 302);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+
+    // Falling back to the form is the useful failure: a handle typo, or a PDS
+    // that could not be resolved.
     return page(
       `<div class="err">${escapeHtml(msg)}</div>
        <h1>Could not start sign-in</h1>
-       <p>Check the handle and try again. It should look like <code>name.bsky.social</code>.</p>
-       <form method="GET" action="/api/oauth/authorize">
-         ${hiddenFields()}
-         <label for="handle">Handle or DID</label>
-         <input id="handle" name="handle" value="${escapeHtml(handle)}" autocapitalize="none"
-                autocorrect="off" spellcheck="false" autofocus required>
-         <button type="submit">Try again</button>
-       </form>`,
+       <p>Enter your handle so we can find your server. It should look like
+       <code>name.bsky.social</code>.</p>
+       ${handleForm('Try again', handle)}`,
       400
     );
   }
