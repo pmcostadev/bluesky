@@ -1,17 +1,21 @@
 /**
  * MCP Tool Definitions - JSON Schema definitions for AI agent consumption
  *
- * 48 tools. Eight were removed when this server moved to OAuth-only auth:
+ * 45 tools. Eleven were removed as this server moved to OAuth-only auth, each
+ * for a reason that cannot be worked around in this codebase:
  *
  *   Need a password, which OAuth replaces:
  *     create_session, create_account
  *   Fight the OAuth layer that owns token lifecycle (atproto refresh tokens are
  *   single-use, so a manual refresh can orphan a session):
  *     delete_session, refresh_session
- *   Refused by Bluesky under OAuth with "OAuth credentials are not supported
- *   for this endpoint" or "Authentication Required":
+ *   Answered "OAuth credentials are not supported for this endpoint" or
+ *   "Authentication Required" by bsky.social:
  *     create_app_password, create_invite_code, create_invite_codes,
- *     get_account_invite_codes
+ *     get_account_invite_codes, list_app_passwords
+ *   Answered "Method Not Implemented": the admin lexicons are not served by
+ *   bsky.social at all, only by a self-hosted PDS:
+ *     search_accounts, admin_send_email
  */
 
 export interface ToolDefinition {
@@ -26,7 +30,7 @@ export interface ToolDefinition {
 
 export const toolDefinitions: ToolDefinition[] = [
 
-  // ── Posts ───────────────────────────────────────────────────────────────
+  // ── Posts ──────────────────────────────────────────────────────────────
 
   {
     name: 'create_post',
@@ -167,7 +171,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Feeds ───────────────────────────────────────────────────────────────
+  // ── Feeds ──────────────────────────────────────────────────────────────
 
   {
     name: 'get_timeline',
@@ -261,7 +265,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Search ────────────────────────────────────────────────────────────────
+  // ── Search ───────────────────────────────────────────────────────────────
 
   {
     name: 'search_actors',
@@ -304,20 +308,8 @@ export const toolDefinitions: ToolDefinition[] = [
       required: ['query']
     }
   },
-  {
-    name: 'search_accounts',
-    description: 'Search accounts via the admin endpoint. Requires admin privileges on the PDS, so this fails for ordinary accounts.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        email: { type: 'string', description: 'Filter by email address', format: 'email' },
-        cursor: { type: 'string', description: 'Pagination cursor' },
-        limit: { type: 'number', description: 'Number of results (1-100, default 20)', minimum: 1, maximum: 100, default: 20 }
-      }
-    }
-  },
 
-  // ── Account / Preferences ──────────────────────────────────────────────────
+  // ── Account / Preferences ─────────────────────────────────────────────────
 
   {
     name: 'get_preferences',
@@ -337,24 +329,6 @@ export const toolDefinitions: ToolDefinition[] = [
         token: { type: 'string', description: 'Optional verification token (if required by the PDS)' }
       },
       required: ['email']
-    }
-  },
-
-  // ── Server / Account Management ─────────────────────────────────────────────
-
-  {
-    name: 'admin_send_email',
-    description: 'Send an email as a PDS admin. Requires admin privileges, so this fails for ordinary accounts.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        recipientDid: { type: 'string', description: 'DID of the recipient' },
-        content: { type: 'string', description: 'Email body content' },
-        subject: { type: 'string', description: 'Email subject line' },
-        senderDid: { type: 'string', description: 'DID of the sender (optional)' },
-        comment: { type: 'string', description: 'Internal comment (optional)' }
-      },
-      required: ['recipientDid', 'content']
     }
   },
   {
@@ -419,16 +393,10 @@ export const toolDefinitions: ToolDefinition[] = [
       properties: {}
     }
   },
-  {
-    name: 'list_app_passwords',
-    description: 'List all app passwords for the connected account. Requires authentication.',
-    inputSchema: {
-      type: 'object',
-      properties: {}
-    }
-  },
 
   // ── Chat ──────────────────────────────────────────────────────────────────
+  // These need the transition:chat.bsky scope, which is requested on new
+  // authorizations. An account connected before that was added must reconnect.
 
   {
     name: 'add_reaction',
@@ -529,7 +497,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Bookmarks ───────────────────────────────────────────────────────────────
+  // ── Bookmarks ──────────────────────────────────────────────────────────────
 
   {
     name: 'create_bookmark',
@@ -566,7 +534,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Drafts ──────────────────────────────────────────────────────────────────
+  // ── Drafts ────────────────────────────────────────────────────────────────
 
   {
     name: 'create_draft',
@@ -658,7 +626,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Age Assurance ────────────────────────────────────────────────────────────
+  // ── Age Assurance ───────────────────────────────────────────────────────────
 
   {
     name: 'begin_age_assurance',
@@ -693,7 +661,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Blob Upload ─────────────────────────────────────────────────────────────
+  // ── Blob Upload ────────────────────────────────────────────────────────────
 
   {
     name: 'upload_blob',
@@ -714,7 +682,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Utility ─────────────────────────────────────────────────────────────────
+  // ── Utility ────────────────────────────────────────────────────────────────
 
   {
     name: 'test_connectivity',
