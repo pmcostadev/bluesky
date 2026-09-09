@@ -77,7 +77,7 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
         try {
           body = JSON.parse(text);
         } catch (e) {
-          /* non-JSON error page */
+          // non-JSON error page
         }
         if (!res.ok) {
           throw new Error(body.message || body.detail || body.error || 'Could not start the connection.');
@@ -104,20 +104,20 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
       });
   }
 
-  /**
-   * Connect a Bluesky account.
-   *
-   * connectBluesky({
-   *   userId: 'user_123',      // your own user id; Composio keys the account to it
-   *   authConfigId: 'ac_...',  // optional, defaults to the server's configured one
-   *   popup: true,             // false redirects the current tab instead
-   *   onStatus: function (s) {},
-   *   timeoutMs: 600000,
-   *   pollIntervalMs: 2000
-   * })
-   *   .then(function (result) { /* result.connectionId, result.status */ })
-   *   .catch(function (err) {});
-   */
+  //
+  // Connect a Bluesky account.
+  //
+  //   connectBluesky({
+  //     userId: 'user_123',      your own user id; Composio keys the account to it
+  //     authConfigId: 'ac_...',  optional, defaults to the server's configured one
+  //     popup: true,             false redirects the current tab instead
+  //     onStatus: function (s) {},
+  //     timeoutMs: 600000,
+  //     pollIntervalMs: 2000
+  //   })
+  //     .then(function (result) { /* result.connectionId, result.status */ })
+  //     .catch(function (err) {});
+  //
   function connectBluesky(options) {
     var opts = options || {};
     var timeoutMs = opts.timeoutMs || 10 * 60 * 1000;
@@ -154,7 +154,7 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
           try {
             if (popup && !popup.closed) popup.close();
           } catch (e) {
-            /* cross-origin popup; it closes itself */
+            // cross-origin popup; it closes itself
           }
         }
 
@@ -165,7 +165,7 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
           try {
             window.dispatchEvent(new CustomEvent('bluesky:connected', { detail: result }));
           } catch (e) {
-            /* older browsers */
+            // older browsers
           }
           resolve(result);
         }
@@ -194,7 +194,7 @@ const SCRIPT = `/* Bluesky MCP connect helper. Served from %ORIGIN%/connect.js *
 
           if (!connectionId) {
             // Nothing to poll; rely on the popup closing itself.
-            if (popup.closed) succeed('UNKNOWN');
+            if (popup.closed) return succeed('UNKNOWN');
             timer = window.setTimeout(poll, intervalMs);
             return;
           }
