@@ -42,8 +42,20 @@ export function publicOrigin(): string {
   return origin.replace(/\/$/, '');
 }
 
-/** Scopes we request from the user's PDS. transition:generic ~ full read/write. */
-export const BSKY_SCOPE = process.env.BLUESKY_SCOPE ?? 'atproto transition:generic';
+/**
+ * Scopes requested from the user's PDS.
+ *
+ *   atproto              required on every session
+ *   transition:generic   broad read/write on the account's own repo
+ *   transition:chat.bsky DMs. Without it, chat.bsky.convo.* calls fail with
+ *                        'Missing required scope rpc:chat.bsky.convo...' even
+ *                        though the request is otherwise correctly proxied.
+ *
+ * Changing this only affects NEW authorizations: an account connected under a
+ * narrower scope keeps that scope until it reconnects.
+ */
+export const BSKY_SCOPE =
+  process.env.BLUESKY_SCOPE ?? 'atproto transition:generic transition:chat.bsky';
 
 export function clientMetadata() {
   const origin = publicOrigin();
