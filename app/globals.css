@@ -1,0 +1,485 @@
+/*
+ * Design system: pmcosta.dev
+ *
+ * Dark only. There is no light palette and none should be authored. Content
+ * surfaces are square, divisions are 1px hairlines, and one warm orange accent
+ * marks the single most important thing on screen.
+ *
+ * Depth comes from three things only: tonal layering, hairline borders, and
+ * typographic weight. No shadows, no gradients, no glows.
+ */
+
+:root {
+  --surface: #121011;
+  --surface-raised: #1c1817;
+  --surface-hover: #2d2825;
+  --on-surface: #f2ede7;
+  --on-surface-muted: #9a938a;
+  --border: #2d2825;
+  --border-strong: #4a423e;
+  --primary: #ff8000;
+  --primary-hover: #ff9426;
+  --on-primary: #121011;
+  --success: #6fbf8b;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--on-surface);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-size: 16px;
+  line-height: 1.625;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--primary-hover);
+  text-decoration: underline;
+}
+
+/* Focus is always visible, 1px accent ring, never removed. */
+:focus-visible {
+  outline: 1px solid var(--primary);
+  outline-offset: 3px;
+}
+
+/* ---------- Shell ---------- */
+
+.shell {
+  max-width: 1152px;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+@media (min-width: 640px) {
+  .shell {
+    padding: 0 24px;
+  }
+}
+
+.section {
+  margin-top: 80px;
+}
+
+@media (min-width: 640px) {
+  .section {
+    margin-top: 112px;
+  }
+}
+
+/* ---------- Type ---------- */
+
+.mono {
+  font-family: var(--font-mono), ui-monospace, monospace;
+}
+
+/* Eyebrows, buttons, metadata: mono, uppercase, wide tracking. */
+.label {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+.label-sm {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+/* Every display level renders uppercase. Every body level renders sentence case. */
+.display-xl {
+  margin: 0;
+  font-size: 48px;
+  font-weight: 900;
+  line-height: 0.95;
+  letter-spacing: -0.03em;
+  text-transform: uppercase;
+}
+
+@media (min-width: 640px) {
+  .display-xl {
+    font-size: 60px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .display-xl {
+    font-size: 72px;
+  }
+}
+
+.display-md {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  text-transform: uppercase;
+}
+
+@media (min-width: 640px) {
+  .display-md {
+    font-size: 36px;
+  }
+}
+
+.title-sm {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  text-transform: uppercase;
+}
+
+.lede {
+  margin: 0;
+  max-width: 34em;
+  font-size: 18px;
+  line-height: 1.625;
+  color: var(--on-surface-muted);
+}
+
+.body {
+  margin: 0;
+  max-width: 42em;
+  font-size: 16px;
+  line-height: 1.625;
+  color: var(--on-surface-muted);
+}
+
+.body strong,
+.lede strong {
+  color: var(--on-surface);
+  font-weight: 700;
+}
+
+/* ---------- Section label: mono orange label, then a rule to the edge ---------- */
+
+.section-label {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 48px;
+}
+
+.section-label > span:first-child {
+  color: var(--primary);
+  white-space: nowrap;
+}
+
+.rule {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ---------- Hero: 4px accent edge, dotted grid ---------- */
+
+.hero {
+  border-left: 4px solid var(--primary);
+  padding: 64px 0 64px 24px;
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+@media (min-width: 640px) {
+  .hero {
+    padding: 112px 0 96px 40px;
+  }
+}
+
+.hero .label {
+  display: block;
+  margin-bottom: 24px;
+  color: var(--primary);
+}
+
+.hero h1 {
+  margin-bottom: 24px;
+}
+
+/* ---------- Chips float above the content plane, so they are rounded ---------- */
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 32px;
+}
+
+.chip {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  color: var(--on-surface-muted);
+}
+
+/* ---------- Cards: square, hairline, no elevation ---------- */
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+
+@media (min-width: 768px) {
+  .grid-3 {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .grid-2 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.card {
+  position: relative;
+  padding: 24px;
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  transition: border-color 150ms ease-out;
+}
+
+.card:hover {
+  border-color: var(--primary);
+}
+
+/* A 2px bottom edge grows from zero on hover. */
+.card::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  height: 2px;
+  width: 0;
+  background: var(--primary);
+  transition: width 500ms ease-out;
+}
+
+.card:hover::after {
+  width: 100%;
+}
+
+.card .label {
+  display: block;
+  margin-bottom: 12px;
+  color: var(--primary);
+}
+
+.card .body {
+  margin-top: 8px;
+  font-size: 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .card::after {
+    transition: none;
+  }
+}
+
+/* ---------- Code ---------- */
+
+.code-block {
+  display: block;
+  padding: 16px;
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  overflow-x: auto;
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--on-surface);
+}
+
+code.inline {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-raised);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 13px;
+  color: var(--on-surface);
+}
+
+/* ---------- Data table: sticky-feeling header, tabular figures ---------- */
+
+.specs {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.specs th {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-strong);
+  text-align: left;
+  color: var(--on-surface-muted);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+
+.specs td {
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--on-surface-muted);
+  font-size: 14px;
+  vertical-align: top;
+}
+
+.specs td:first-child {
+  color: var(--on-surface);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding-right: 24px;
+}
+
+/* ---------- Status: a 7px square dot plus a word, never a dot alone ---------- */
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--on-surface-muted);
+}
+
+.status-dot {
+  width: 7px;
+  height: 7px;
+  background: var(--border-strong);
+}
+
+.status[data-state='ok'] .status-dot {
+  background: var(--success);
+}
+
+/* ---------- Buttons: square, 48px, mono uppercase ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 48px;
+  padding: 0 32px;
+  border: 0;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background-color 150ms ease-out;
+}
+
+.btn:hover {
+  background: var(--primary-hover);
+  color: var(--on-primary);
+  text-decoration: none;
+}
+
+.btn-secondary {
+  background: var(--surface);
+  color: var(--on-surface);
+  border: 1px solid var(--border);
+}
+
+.btn-secondary:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+  color: var(--on-surface);
+}
+
+/* On orange, the fill is charcoal. Never white: it glares and outshouts the headline. */
+.btn-on-primary {
+  background: var(--on-primary);
+  color: var(--on-surface);
+}
+
+.btn-on-primary:hover {
+  background: var(--surface-hover);
+  color: var(--on-surface);
+}
+
+/* ---------- Closing call to action: the one large orange fill ---------- */
+
+.cta {
+  margin-top: 112px;
+  background: var(--primary);
+  color: var(--on-primary);
+  padding: 24px;
+}
+
+.cta-inner {
+  border: 2px solid var(--on-primary);
+  padding: 48px 24px;
+  text-align: center;
+}
+
+@media (min-width: 640px) {
+  .cta-inner {
+    padding: 64px 32px;
+  }
+}
+
+.cta .label {
+  display: block;
+  margin-bottom: 16px;
+  color: var(--on-primary);
+}
+
+.cta h2 {
+  margin: 0 auto 32px;
+  max-width: 24em;
+  color: var(--on-primary);
+}
+
+.icon-tile {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 24px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--on-primary);
+  color: var(--on-primary);
+}
+
+/* ---------- Footer ---------- */
+
+.foot {
+  margin-top: 80px;
+  padding: 32px 0;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  align-items: center;
+  color: var(--on-surface-muted);
+}
