@@ -1,8 +1,7 @@
 /**
  * MCP Tool Definitions - JSON Schema definitions for AI agent consumption
  *
- * 45 tools. Eleven were removed as this server moved to OAuth-only auth, each
- * for a reason that cannot be worked around in this codebase:
+ * 42 tools. Fourteen were removed as this server moved to OAuth-only auth:
  *
  *   Need a password, which OAuth replaces:
  *     create_session, create_account
@@ -16,6 +15,9 @@
  *   Answered "Method Not Implemented": the admin lexicons are not served by
  *   bsky.social at all, only by a self-hosted PDS:
  *     search_accounts, admin_send_email
+ *   Deliberately withheld from agents. One-off, irreversible or side-effecting
+ *   actions that belong in Bluesky's own settings:
+ *     deactivate_account, delete_account, begin_age_assurance
  */
 
 export interface ToolDefinition {
@@ -309,7 +311,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Account / Preferences ─────────────────────────────────────────────────
+  // ── Account ───────────────────────────────────────────────────────────────
 
   {
     name: 'get_preferences',
@@ -321,7 +323,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'update_email',
-    description: 'Update the email address associated with the connected account. Requires authentication.',
+    description: 'Update the email address associated with the connected account. Changes a real account setting, so confirm with the user first. Requires authentication.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -333,7 +335,7 @@ export const toolDefinitions: ToolDefinition[] = [
   },
   {
     name: 'confirm_email',
-    description: 'Confirm an email address using a verification token. Requires authentication.',
+    description: 'Confirm an email address using a verification token that Bluesky emailed to the account. Requires authentication.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -341,27 +343,6 @@ export const toolDefinitions: ToolDefinition[] = [
         token: { type: 'string', description: 'Verification token' }
       },
       required: ['email', 'token']
-    }
-  },
-  {
-    name: 'deactivate_account',
-    description: 'Deactivate the connected account. Destructive. Requires authentication.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        deleteAfter: { type: 'string', description: 'ISO 8601 timestamp for when to permanently delete the account (optional)' }
-      }
-    }
-  },
-  {
-    name: 'delete_account',
-    description: 'Permanently delete the connected account. Irreversible, and requires the account password as confirmation. Requires authentication.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        password: { type: 'string', description: 'Account password for confirmation' }
-      },
-      required: ['password']
     }
   },
   {
@@ -497,7 +478,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Bookmarks ──────────────────────────────────────────────────────────────
+  // ── Bookmarks ───────────────────────────────────────────────────────────────
 
   {
     name: 'create_bookmark',
@@ -534,7 +515,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Drafts ────────────────────────────────────────────────────────────────
+  // ── Drafts ─────────────────────────────────────────────────────────────────
 
   {
     name: 'create_draft',
@@ -626,21 +607,10 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Age Assurance ───────────────────────────────────────────────────────────
+  // ── Age Assurance ────────────────────────────────────────────────────────────
+  // Read-only. Starting the flow sends a real verification email, so it is not
+  // exposed as a tool: do it from the Bluesky app.
 
-  {
-    name: 'begin_age_assurance',
-    description: 'Initiate the Age Assurance flow for the connected account. Bluesky emails a verification link to the address given. Requires authentication.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        email: { type: 'string', description: 'Email address to send the verification link to', format: 'email' },
-        countryCode: { type: 'string', description: 'ISO 3166-1 alpha-2 country code, e.g. "PT" or "US". Selects the verification provider and rules.', minLength: 2, maxLength: 2 },
-        language: { type: 'string', description: 'Language for the verification email, e.g. "en" or "pt". Defaults to "en".' }
-      },
-      required: ['email', 'countryCode']
-    }
-  },
   {
     name: 'get_age_assurance_config',
     description: 'Get the Age Assurance configuration for the connected account (provider info, requirements, etc.). Requires authentication.',
@@ -661,7 +631,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Blob Upload ────────────────────────────────────────────────────────────
+  // ── Blob Upload ─────────────────────────────────────────────────────────────
 
   {
     name: 'upload_blob',
@@ -682,7 +652,7 @@ export const toolDefinitions: ToolDefinition[] = [
     }
   },
 
-  // ── Utility ────────────────────────────────────────────────────────────────
+  // ── Utility ─────────────────────────────────────────────────────────────────
 
   {
     name: 'test_connectivity',
