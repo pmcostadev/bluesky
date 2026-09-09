@@ -1,3 +1,5 @@
+import { corsHeaders, originBlocked, preflight } from '@/cors';
+
 export const runtime = 'nodejs';
 
 /**
@@ -10,6 +12,10 @@ export const runtime = 'nodejs';
  *
  * POST /api/connect/link { authConfigId?, userId? }
  *   -> { redirectUrl, connectionId, callbackUrl }
+ *
+ * The caller opens redirectUrl (usually in a popup) and polls
+ * /api/connect/status?connectionId=... until it reports ACTIVE. /connect.js
+ * does both for you.
  */
 
 const COMPOSIO_API = 'https://backend.composio.dev/api/v3';
@@ -29,7 +35,20 @@ function publicOrigin(req: Request): string {
   return `${proto}://${host}`;
 }
 
+export async function OPTIONS(req: Request) {
+  return preflight(req);
+}
+
 export async function POST(req: Request) {
+  const cors = corsHeaders(req);
+
+  if (originBlocked(req)) {
+    return Response.json(
+      { error: 'origin_not_allowed', message: 'This origin is not on CONNECT_ALLOWED_ORIGINS.' },
+      { status: 403, headers: cors }
+    );
+  }
+
   let body: { authConfigId?: string; userId?: string } = {};
   try {
     body = await req.json();
@@ -45,7 +64,7 @@ export async function POST(req: Request) {
   } catch (e) {
     return Response.json(
       { error: 'not_configured', message: e instanceof Error ? e.message : String(e) },
-      { status: 500 }
+      { status: 500, headers: cors }
     );
   }
 
@@ -71,7 +90,7 @@ export async function POST(req: Request) {
     if (!res.ok) {
       return Response.json(
         { error: 'composio_error', status: res.status, detail: text.slice(0, 500) },
-        { status: 502 }
+        { status: 502, headers: cors }
       );
     }
 
@@ -86,19 +105,22 @@ export async function POST(req: Request) {
     if (!redirectUrl) {
       return Response.json(
         { error: 'no_redirect_url', detail: text.slice(0, 500) },
-        { status: 502 }
+        { status: 502, headers: cors }
       );
     }
 
-    return Response.json({
-      redirectUrl,
-      connectionId: data.connected_account_id ?? data.connectedAccountId ?? data.id ?? null,
-      callbackUrl
-    });
+    return Response.json(
+      {
+        redirectUrl,
+        connectionId: data.connected_account_id ?? data.connectedAccountId ?? data.id ?? null,
+        callbackUrl
+      },
+      { headers: cors }
+    );
   } catch (e) {
     return Response.json(
       { error: 'request_failed', message: e instanceof Error ? e.message : String(e) },
-      { status: 502 }
+      { status: 502, headers: cors }
     );
   }
 }
