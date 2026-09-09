@@ -26,7 +26,6 @@ import type {
   UpdateDraftInput,
   DeleteDraftInput,
   GetDraftsInput,
-  SearchAccountsInput,
   CreateBookmarkInput,
   DeleteBookmarkInput,
   AddReactionInput,
@@ -36,13 +35,9 @@ import type {
   SendMessageBatchInput,
   GetMessageContextInput,
   UpdateEmailInput,
-  AdminSendEmailInput,
   ConfirmEmailInput,
-  DeactivateAccountInput,
-  DeleteAccountInput,
   GetServiceAuthInput,
   AgeAssuranceStateInput,
-  BeginAgeAssuranceInput,
   ProcessedImage,
   UploadBlobInput,
   ToolResult
@@ -269,12 +264,72 @@ export async function handleSearchPosts(client: BlueskyClient, params: SearchPos
   }
 }
 
-// ── Account / Preferences ─────────────────────────────────────────────────────
+// ── Account / Preferences ──────────────────────────────────────────────────────
 
 export async function handleGetPreferences(client: BlueskyClient): Promise<ToolResult> {
   try {
     if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
     const result = await client.getPreferences();
+    return { success: true, data: result };
+  } catch (error) {
+    return { success: false, error: formatError(error) };
+  }
+}
+
+export async function handleUpdateEmail(client: BlueskyClient, params: UpdateEmailInput): Promise<ToolResult> {
+  try {
+    if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
+    if (!params.email) return { success: false, error: 'email is required' };
+    await client.updateEmail(
+      sanitizeString(params.email),
+      params.token ? sanitizeString(params.token) : undefined
+    );
+    return { success: true, data: { updated: true } };
+  } catch (error) {
+    return { success: false, error: formatError(error) };
+  }
+}
+
+export async function handleConfirmEmail(client: BlueskyClient, params: ConfirmEmailInput): Promise<ToolResult> {
+  try {
+    if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
+    if (!params.email) return { success: false, error: 'email is required' };
+    if (!params.token) return { success: false, error: 'token is required' };
+    await client.confirmEmail(sanitizeString(params.email), sanitizeString(params.token));
+    return { success: true, data: { confirmed: true } };
+  } catch (error) {
+    return { success: false, error: formatError(error) };
+  }
+}
+
+export async function handleDescribeServer(client: BlueskyClient): Promise<ToolResult> {
+  try {
+    const result = await client.describeServer();
+    return { success: true, data: result };
+  } catch (error) {
+    return { success: false, error: formatError(error) };
+  }
+}
+
+export async function handleGetServiceAuth(client: BlueskyClient, params: GetServiceAuthInput): Promise<ToolResult> {
+  try {
+    if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
+    if (!params.aud) return { success: false, error: 'aud is required' };
+    const result = await client.getServiceAuth(
+      sanitizeString(params.aud),
+      params.lxm ? sanitizeString(params.lxm) : undefined,
+      params.exp
+    );
+    return { success: true, data: result };
+  } catch (error) {
+    return { success: false, error: formatError(error) };
+  }
+}
+
+export async function handleGetSession(client: BlueskyClient): Promise<ToolResult> {
+  try {
+    if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
+    const result = await client.getSession();
     return { success: true, data: result };
   } catch (error) {
     return { success: false, error: formatError(error) };
@@ -320,22 +375,6 @@ export async function handleGetBookmarks(client: BlueskyClient, params: { cursor
 }
 
 // ── Age Assurance ─────────────────────────────────────────────────────────────
-
-export async function handleBeginAgeAssurance(client: BlueskyClient, params: BeginAgeAssuranceInput): Promise<ToolResult> {
-  try {
-    if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
-    if (!params.email) return { success: false, error: 'email is required' };
-    if (!params.countryCode) return { success: false, error: 'countryCode is required (ISO 3166-1 alpha-2, e.g. "PT")' };
-    const result = await client.beginAgeAssurance(
-      sanitizeString(params.email),
-      sanitizeString(params.countryCode, 2),
-      params.language ? sanitizeString(params.language, 10) : 'en'
-    );
-    return { success: true, data: result };
-  } catch (error) {
-    return { success: false, error: formatError(error) };
-  }
-}
 
 export async function handleGetAgeAssuranceConfig(client: BlueskyClient): Promise<ToolResult> {
   try {
@@ -475,22 +514,6 @@ export async function handleUploadBlob(client: BlueskyClient, params: UploadBlob
   }
 }
 
-// ── Admin Search ──────────────────────────────────────────────────────────────
-
-export async function handleSearchAccounts(client: BlueskyClient, params: SearchAccountsInput): Promise<ToolResult> {
-  try {
-    if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
-    const result = await client.searchAccounts({
-      email: params.email ? sanitizeString(params.email) : undefined,
-      cursor: sanitizeCursor(params.cursor),
-      limit: sanitizeLimit(params.limit, DEFAULT_LIMIT)
-    });
-    return { success: true, data: result };
-  } catch (error) {
-    return { success: false, error: formatError(error) };
-  }
-}
-
 // ── Chat ─────────────────────────────────────────────────────────────────────
 
 export async function handleAddReaction(client: BlueskyClient, params: AddReactionInput): Promise<ToolResult> {
@@ -591,119 +614,6 @@ export async function handleGetMessageContext(client: BlueskyClient, params: Get
   }
 }
 
-// ── Account ───────────────────────────────────────────────────────────────────
-
-export async function handleUpdateEmail(client: BlueskyClient, params: UpdateEmailInput): Promise<ToolResult> {
-  try {
-    if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
-    if (!params.email) return { success: false, error: 'email is required' };
-    await client.updateEmail(
-      sanitizeString(params.email),
-      params.token ? sanitizeString(params.token) : undefined
-    );
-    return { success: true, data: { updated: true } };
-  } catch (error) {
-    return { success: false, error: formatError(error) };
-  }
-}
-
-// ── Server / Account Management ───────────────────────────────────────────────
-
-export async function handleAdminSendEmail(client: BlueskyClient, params: AdminSendEmailInput): Promise<ToolResult> {
-  try {
-    if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
-    if (!params.recipientDid) return { success: false, error: 'recipientDid is required' };
-    if (!params.content) return { success: false, error: 'content is required' };
-    const result = await client.adminSendEmail(
-      sanitizeString(params.recipientDid),
-      sanitizeString(params.content),
-      params.subject ? sanitizeString(params.subject) : undefined,
-      params.senderDid ? sanitizeString(params.senderDid) : undefined,
-      params.comment ? sanitizeString(params.comment) : undefined
-    );
-    return { success: true, data: result };
-  } catch (error) {
-    return { success: false, error: formatError(error) };
-  }
-}
-
-export async function handleConfirmEmail(client: BlueskyClient, params: ConfirmEmailInput): Promise<ToolResult> {
-  try {
-    if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
-    if (!params.email) return { success: false, error: 'email is required' };
-    if (!params.token) return { success: false, error: 'token is required' };
-    await client.confirmEmail(sanitizeString(params.email), sanitizeString(params.token));
-    return { success: true, data: { confirmed: true } };
-  } catch (error) {
-    return { success: false, error: formatError(error) };
-  }
-}
-
-export async function handleDeactivateAccount(client: BlueskyClient, params: DeactivateAccountInput): Promise<ToolResult> {
-  try {
-    if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
-    await client.deactivateAccount(params.deleteAfter ? sanitizeString(params.deleteAfter) : undefined);
-    return { success: true, data: { deactivated: true } };
-  } catch (error) {
-    return { success: false, error: formatError(error) };
-  }
-}
-
-export async function handleDeleteAccount(client: BlueskyClient, params: DeleteAccountInput): Promise<ToolResult> {
-  try {
-    if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
-    if (!params.password) return { success: false, error: 'password is required' };
-    await client.deleteAccount(params.password);
-    return { success: true, data: { deleted: true } };
-  } catch (error) {
-    return { success: false, error: formatError(error) };
-  }
-}
-
-export async function handleDescribeServer(client: BlueskyClient): Promise<ToolResult> {
-  try {
-    const result = await client.describeServer();
-    return { success: true, data: result };
-  } catch (error) {
-    return { success: false, error: formatError(error) };
-  }
-}
-
-export async function handleGetServiceAuth(client: BlueskyClient, params: GetServiceAuthInput): Promise<ToolResult> {
-  try {
-    if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
-    if (!params.aud) return { success: false, error: 'aud is required' };
-    const result = await client.getServiceAuth(
-      sanitizeString(params.aud),
-      params.lxm ? sanitizeString(params.lxm) : undefined,
-      params.exp
-    );
-    return { success: true, data: result };
-  } catch (error) {
-    return { success: false, error: formatError(error) };
-  }
-}
-
-export async function handleGetSession(client: BlueskyClient): Promise<ToolResult> {
-  try {
-    if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
-    const result = await client.getSession();
-    return { success: true, data: result };
-  } catch (error) {
-    return { success: false, error: formatError(error) };
-  }
-}
-
-export async function handleListAppPasswords(client: BlueskyClient): Promise<ToolResult> {
-  try {
-    if (!client.isLoggedIn()) return { success: false, error: 'Authentication required' };
-    const result = await client.listAppPasswords();
-    return { success: true, data: result };
-  } catch (error) {
-    return { success: false, error: formatError(error) };
-  }
-}
-
 // ── Utility ───────────────────────────────────────────────────────────────────
 
 export async function handleTestConnectivity(client: BlueskyClient): Promise<ToolResult> {
@@ -728,7 +638,7 @@ export async function handleTestConnectivity(client: BlueskyClient): Promise<Too
   }
 }
 
-// ── Registry ──────────────────────────────────────────────────────────────────
+// ── Registry ───────────────────────────────────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const toolHandlers: Record<string, (...args: any[]) => Promise<ToolResult>> = {
@@ -755,19 +665,13 @@ export const toolHandlers: Record<string, (...args: any[]) => Promise<ToolResult
   search_actors: handleSearchActors,
   search_actors_typeahead: handleSearchActorsTypeahead,
   search_posts: handleSearchPosts,
-  search_accounts: handleSearchAccounts,
   // Account
   get_preferences: handleGetPreferences,
   update_email: handleUpdateEmail,
-  // Server / Account Management
-  admin_send_email: handleAdminSendEmail,
   confirm_email: handleConfirmEmail,
-  deactivate_account: handleDeactivateAccount,
-  delete_account: handleDeleteAccount,
   describe_server: handleDescribeServer,
   get_service_auth: handleGetServiceAuth,
   get_session: handleGetSession,
-  list_app_passwords: handleListAppPasswords,
   // Chat
   add_reaction: handleAddReaction,
   remove_reaction: handleRemoveReaction,
@@ -785,7 +689,6 @@ export const toolHandlers: Record<string, (...args: any[]) => Promise<ToolResult
   delete_draft: handleDeleteDraft,
   get_drafts: handleGetDrafts,
   // Age Assurance
-  begin_age_assurance: handleBeginAgeAssurance,
   get_age_assurance_config: handleGetAgeAssuranceConfig,
   get_age_assurance_state: handleGetAgeAssuranceState,
   // Blob Upload
